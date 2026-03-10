@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SoyLM</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a2e;
+            --bg-secondary: #16213e;
+            --bg-card: #1e2a47;
+            --bg-hover: #253559;
+            --text-primary: #e8e8e8;
+            --text-secondary: #8b95a5;
+            --accent: #4fc3f7;
+            --accent-hover: #29b6f6;
+            --border: #2a3a5c;
+            --danger: #ef5350;
+            --success: #66bb6a;
+            --radius: 10px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        .header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 20px 40px;
+            border-bottom: 1px solid var(--border);
+        }
+        .header h1 {
+            font-size: 24px; font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), #81d4fa);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .header .subtitle { color: var(--text-secondary); font-size: 13px; margin-left: 12px; }
+        .container { max-width: 960px; margin: 40px auto; padding: 0 20px; }
+        .create-bar {
+            display: flex; gap: 10px; margin-bottom: 32px;
+        }
+        .create-bar input {
+            flex: 1; padding: 12px 16px;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius); color: var(--text-primary);
+            font-size: 14px; outline: none;
+        }
+        .create-bar input:focus { border-color: var(--accent); }
+        .btn {
+            padding: 10px 20px; border-radius: var(--radius); border: none;
+            font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+        }
+        .btn-primary {
+            background: var(--accent); color: #0a0a1a;
+        }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-sm { padding: 6px 14px; font-size: 12px; }
+        .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+        .btn-danger:hover { background: var(--danger); color: #fff; }
+        .notebooks-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        .notebook-card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 20px;
+            cursor: pointer; transition: all 0.15s; position: relative;
+        }
+        .notebook-card:hover {
+            border-color: var(--accent); background: var(--bg-hover);
+            transform: translateY(-2px);
+        }
+        .notebook-card h3 { font-size: 16px; margin-bottom: 8px; }
+        .notebook-card .meta { font-size: 12px; color: var(--text-secondary); }
+        .notebook-card .delete-btn {
+            position: absolute; top: 12px; right: 12px;
+            background: none; border: none; color: var(--text-secondary);
+            cursor: pointer; font-size: 16px; opacity: 0; transition: opacity 0.15s;
+        }
+        .notebook-card:hover .delete-btn { opacity: 1; }
+        .notebook-card .delete-btn:hover { color: var(--danger); }
+        .empty-state {
+            text-align: center; padding: 80px 20px; color: var(--text-secondary);
+        }
+        .empty-state h2 { font-size: 20px; margin-bottom: 8px; color: var(--text-primary); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div style="display:flex;align-items:baseline;">
+            <h1>SoyLM</h1>
+            <span class="subtitle">Local-first Research Assistant</span>
+        </div>
+    </div>
+    <div class="container">
+        <form class="create-bar" onsubmit="createNotebook(event)">
+            <input type="text" id="nb-name" placeholder="ノートブック名を入力..." value="新規ノートブック">
+            <button type="submit" class="btn btn-primary">+ 作成</button>
+        </form>
+
+        {% if notebooks %}
+        <div class="notebooks-grid">
+            {% for nb in notebooks %}
+            <div class="notebook-card" onclick="location.href='/notebook/{{ nb.id }}'">
+                <button class="delete-btn" onclick="event.stopPropagation();deleteNotebook('{{ nb.id }}')" title="削除">✕</button>
+                <h3>{{ nb.name }}</h3>
+                <div class="meta">{{ nb.updated_at }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <h2>ノートブックがありません</h2>
+            <p>上のフォームから新規作成してください</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+    async function createNotebook(e) {
+        e.preventDefault();
+        const name = document.getElementById('nb-name').value.trim();
+        if (!name) return;
+        const form = new FormData();
+        form.append('name', name);
+        const r = await fetch('/api/notebooks', { method: 'POST', body: form });
+        const data = await r.json();
+        location.href = '/notebook/' + data.id;
+    }
+    async function deleteNotebook(id) {
+        if (!confirm('削除しますか？')) return;
+        await fetch('/api/notebooks/' + id, { method: 'DELETE' });
+        location.reload();
+    }
+    </script>
+</body>
+</html>
