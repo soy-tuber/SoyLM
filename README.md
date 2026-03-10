@@ -1,81 +1,97 @@
-# SoyLM — Local-first Research Assistant
+# SoyLM
 
-Gloss超え。FastAPI + Jinja2 の爆速NotebookLM代替。
+Local-first NotebookLM alternative powered by [Nemotron-Nano-9B-v2-Japanese](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese) via vLLM.
 
-## セットアップ
+## What it does
+
+Upload documents, URLs, or YouTube videos as sources. SoyLM analyzes them with a local LLM, stores structured summaries in SQLite, and lets you chat with your sources using RAG (FTS5 + BM25) and optional web search (DuckDuckGo).
+
+## Features
+
+- **Source ingestion** — Files, web URLs (with Playwright JS rendering fallback), YouTube transcripts
+- **Local LLM** — Nemotron-Nano-9B via vLLM (OpenAI-compatible API), thinking mode for inference
+- **RAG search** — SQLite FTS5 full-text search with BM25 ranking
+- **Web search** — DuckDuckGo integration for supplementing source data
+- **SSE streaming** — Real-time streamed responses
+- **Chat history** — Persistent chat logs with JSON export
+- **Deduplication** — SHA-256 hash prevents duplicate sources
+
+## Architecture
+
+```
+Browser (Jinja2 SSR + vanilla JS)
+  ├── Sources panel     ← upload / manage
+  ├── Chat (SSE)        ← streaming Q&A
+  └── Chat history      ← logs + export
+        │
+        ▼
+FastAPI backend (single file: app.py)
+  ├── Nemotron (vLLM localhost:8000)
+  ├── SQLite (soylm.db) + FTS5
+  ├── Playwright (JS-rendered pages)
+  ├── youtube-transcript-api
+  └── DuckDuckGo search (ddgs)
+```
+
+## Setup
+
+### Prerequisites
+
+- Python 3.11+
+- NVIDIA GPU with vLLM serving Nemotron (or any OpenAI-compatible endpoint)
+
+### Install
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/soy-tuber/SoyLM.git
+cd SoyLM
+uv venv && uv pip install -r requirements.txt
+playwright install chromium
+```
 
-# 環境変数
-export GEMINI_API_KEY="your-key-here"
-export NEMOTRON_BASE="http://localhost:8000/v1"        # vLLM endpoint
-export NEMOTRON_MODEL="nvidia/llama-3.1-nemotron-ultra-253b-v1"
+### Run
 
-# 起動
+```bash
+# Start vLLM first (example)
+vllm serve nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese
+
+# Then start SoyLM
 uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-## アーキテクチャ
+Open `http://localhost:8080`
+
+### Environment variables (optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEMOTRON_BASE` | `http://localhost:8000/v1` | vLLM endpoint |
+| `NEMOTRON_MODEL` | `nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese` | Model name |
+| `GEMINI_API_KEY` | (empty) | Optional, for Gemini fallback (dead code) |
+
+## Usage
+
+1. Create a notebook
+2. Add sources (files, URLs, YouTube links)
+3. Click **Load Sources**
+4. Ask questions
+
+Toggle **Full Context** to feed all source analyses into the prompt.
+Toggle **Web Search** to supplement answers with DuckDuckGo results.
+
+## File structure
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Browser (Jinja2 SSR + minimal JS)              │
-│  ┌──────────┐ ┌──────────────┐ ┌──────────────┐│
-│  │ Sources  │ │  Chat (SSE)  │ │  Chat Logs   ││
-│  │ Panel    │ │  Streaming   │ │  + Download  ││
-│  └──────────┘ └──────────────┘ └──────────────┘│
-└──────────────────┬──────────────────────────────┘
-                   │ REST + SSE
-┌──────────────────┴──────────────────────────────┐
-│  FastAPI Backend (single file: app.py)          │
-│                                                 │
-│  ┌─────────────┐  ┌──────────────┐              │
-│  │ Flash Loader │  │ RAG Search   │              │
-│  │ (Gemini 2.5  │  │ (FTS5 BM25)  │              │
-│  │  Flash)      │  │              │              │
-│  └──────┬──────┘  └──────┬───────┘              │
-│         │                │                      │
-│  ┌──────┴────────────────┴───────┐              │
-│  │       SQLite (soylm.db)       │              │
-│  │  notebooks | sources | FTS5   │              │
-│  │  chatlogs  | messages         │              │
-│  └───────────────────────────────┘              │
-│                                                 │
-│  LLM Providers:                                 │
-│  ├─ Nemotron (vLLM localhost, default)          │
-│  ├─ Gemini 2.5 Flash (preprocessing + chat)     │
-│  └─ Gemini 2.5 Pro (full context mode)          │
-│                                                 │
-│  Tools:                                         │
-│  ├─ DDG Search (Web検索)                         │
-│  └─ Fact Checker (Gemini Flash + DDG)           │
-└─────────────────────────────────────────────────┘
-```
-
-## 機能
-
-- **ソースアップロード**: ファイル / URL / YouTube / テキスト貼付（最大50件）
-- **Flash ロード**: Gemini 2.5 Flash で要約・キーポイント抽出 → SQLite格納
-- **3カラムUI**: ソース | チャット(SSE) | チャット履歴
-- **モデル切替**: Nemotron(ローカル) / Flash / Pro
-- **コンテキスト全投入**: Pro選択時、Flash前処理データを全投入
-- **DDG検索**: チャット内でWeb検索結果を統合
-- **ファクトチェッカー**: Gemini Flash + DDG で回答を検証
-- **チャットログ保存 + JSONダウンロード**
-- **hash重複排除**: 同一ソースの二重登録防止
-
-## ファイル構成
-
-```
-gloss_killer/
-├── app.py              # 全バックエンドロジック（約550行）
+SoyLM/
+├── app.py              # All backend logic
 ├── templates/
-│   ├── index.html      # ホーム（ノートブック一覧）
-│   └── notebook.html   # メイン画面（3カラム）
-├── data/
-│   ├── soylm.db        # 自動生成
-│   └── sources/        # ファイル保存用
-├── requirements.txt
-└── README.md
+│   ├── index.html      # Home (notebook list)
+│   └── notebook.html   # Main 3-column UI
+├── data/               # Auto-generated, gitignored
+│   └── soylm.db        # SQLite database
+└── requirements.txt
 ```
+
+## License
+
+MIT

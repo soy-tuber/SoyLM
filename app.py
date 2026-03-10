@@ -806,10 +806,10 @@ async def chat_stream(request: Request):
         )
 
     # System prompt
-    system = """あなたは優秀なリサーチアシスタントです。
-提供されたソース情報に基づいて正確に回答してください。
-ソースにない情報は推測であることを明示してください。
-回答は日本語で行ってください。"""
+    system = """You are an expert research assistant.
+Answer accurately based on the provided source data.
+If information is not in the sources, clearly state it is speculation.
+Respond in the same language as the user's question."""
 
     # Build user prompt
     prompt_parts = []

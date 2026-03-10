@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -133,14 +133,6 @@
             align-self: center; background: transparent; color: var(--text-dim);
             font-size: 12px; font-style: italic;
         }
-        .factcheck-badge {
-            display: inline-block; margin-top: 8px; padding: 4px 10px;
-            border-radius: 20px; font-size: 11px; font-weight: 600;
-        }
-        .fc-正確 { background: rgba(102,187,106,0.2); color: var(--success); }
-        .fc-不正確 { background: rgba(239,83,80,0.2); color: var(--danger); }
-        .fc-要検証 { background: rgba(255,167,38,0.2); color: var(--warning); }
-        .fc-情報不足 { background: rgba(139,149,165,0.2); color: var(--text-secondary); }
         .search-results {
             margin-top: 8px; padding: 8px 12px; background: var(--bg-secondary);
             border-radius: var(--radius); font-size: 12px;
@@ -168,7 +160,7 @@
         .chat-input-bar .send-btn:hover { background: var(--accent-hover); }
         .chat-input-bar .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-        /* ── Right: Chatlogs ── */
+        /* ── Right: Chat Logs ── */
         .col-logs {
             border-left: 1px solid var(--border);
             display: flex; flex-direction: column; overflow: hidden;
@@ -247,7 +239,7 @@
     <!-- Header -->
     <div class="header">
         <div class="header-left">
-            <a href="/" class="back">←</a>
+            <a href="/" class="back">&larr;</a>
             <h1>{{ notebook.name }}</h1>
             <span class="badge" id="source-count">{{ sources|length }} sources</span>
         </div>
@@ -258,21 +250,21 @@
         <!-- LEFT: Sources -->
         <div class="col-sources">
             <div class="col-title">
-                ソース
-                <button class="btn btn-outline" style="width:auto;padding:4px 10px;" onclick="openUploadModal()">+ 追加</button>
+                Sources
+                <button class="btn btn-outline" style="width:auto;padding:4px 10px;" onclick="openUploadModal()">+ Add</button>
             </div>
             <div class="source-list" id="source-list">
                 {% for s in sources %}
                 <div class="source-item" id="src-{{ s.id }}">
                     <span class="status {{ 'status-loaded' if s.loaded else 'status-pending' }}"></span>
                     <span class="name" title="{{ s.filename }}">{{ s.filename }}</span>
-                    <button class="del-btn" onclick="deleteSource('{{ s.id }}')" title="削除">✕</button>
+                    <button class="del-btn" onclick="deleteSource('{{ s.id }}')" title="Delete">✕</button>
                 </div>
                 {% endfor %}
             </div>
             <div class="source-actions">
                 <button class="btn btn-load" id="load-btn" onclick="loadSources()">
-                    ⚡ ロード
+                    Load Sources
                 </button>
             </div>
         </div>
@@ -284,41 +276,41 @@
                     <option value="nemotron">Nemotron (Local)</option>
                 </select>
                 <label class="toggle">
-                    <input type="checkbox" id="full-context"> コンテキスト全投入
+                    <input type="checkbox" id="full-context"> Full Context
                 </label>
                 <label class="toggle">
-                    <input type="checkbox" id="enable-search"> DDG検索
+                    <input type="checkbox" id="enable-search"> Web Search
                 </label>
             </div>
             <div class="chat-messages" id="chat-messages">
-                <div class="msg msg-system">ソースを追加して「Flash ロード」を押してから質問してください</div>
+                <div class="msg msg-system">Add sources and click "Load Sources" to get started</div>
             </div>
             <div class="chat-input-bar">
-                <textarea id="chat-input" placeholder="質問を入力..." rows="1"
+                <textarea id="chat-input" placeholder="Ask a question..." rows="1"
                     onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
-                <button class="send-btn" id="send-btn" onclick="sendMessage()">▶</button>
+                <button class="send-btn" id="send-btn" onclick="sendMessage()">&#9654;</button>
             </div>
         </div>
 
         <!-- RIGHT: Chat Logs -->
         <div class="col-logs">
             <div class="col-title">
-                チャット履歴
-                <button class="btn btn-outline" style="width:auto;padding:4px 10px;" onclick="newChatlog()">+ 新規</button>
+                Chat History
+                <button class="btn btn-outline" style="width:auto;padding:4px 10px;" onclick="newChatlog()">+ New</button>
             </div>
             <div class="log-list" id="log-list">
                 {% for cl in chatlogs %}
                 <div class="log-item" id="log-{{ cl.id }}" onclick="loadChatlog('{{ cl.id }}')">
                     <span class="title">{{ cl.title }}</span>
                     <div class="actions">
-                        <button onclick="event.stopPropagation();downloadChatlog('{{ cl.id }}')" title="ダウンロード">⬇</button>
-                        <button onclick="event.stopPropagation();deleteChatlog('{{ cl.id }}')" title="削除">✕</button>
+                        <button onclick="event.stopPropagation();downloadChatlog('{{ cl.id }}')" title="Download">&#11015;</button>
+                        <button onclick="event.stopPropagation();deleteChatlog('{{ cl.id }}')" title="Delete">✕</button>
                     </div>
                 </div>
                 {% endfor %}
             </div>
             <div class="log-actions">
-                <button class="btn btn-outline" onclick="newChatlog()">+ 新規チャット</button>
+                <button class="btn btn-outline" onclick="newChatlog()">+ New Chat</button>
             </div>
         </div>
     </div>
@@ -326,14 +318,14 @@
     <!-- Upload Modal -->
     <div class="modal-overlay" id="upload-modal">
         <div class="modal">
-            <h3>ソースを追加</h3>
+            <h3>Add Sources</h3>
             <form id="upload-form" onsubmit="uploadSources(event)">
-                <input type="file" id="upload-files" multiple accept=".txt,.md,.py,.rs,.ts,.js,.json,.csv,.html,.xml,.yaml,.yml,.toml">
-                <input type="text" id="upload-urls" placeholder="URLを入力（1行に1つ、YouTube可）">
-                <textarea id="upload-paste" placeholder="テキストを直接貼り付け..."></textarea>
+                <input type="file" id="upload-files" multiple accept=".txt,.md,.py,.rs,.ts,.js,.json,.csv,.html,.xml,.yaml,.yml,.toml,.pdf">
+                <input type="text" id="upload-urls" placeholder="Enter URLs (one per line, YouTube supported)">
+                <textarea id="upload-paste" placeholder="Paste text directly..."></textarea>
                 <div class="btn-row">
-                    <button type="button" class="btn btn-outline" onclick="closeUploadModal()">キャンセル</button>
-                    <button type="submit" class="btn btn-primary">追加</button>
+                    <button type="button" class="btn btn-outline" onclick="closeUploadModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Add</button>
                 </div>
             </form>
         </div>
@@ -365,7 +357,7 @@
 
     // ── Sources ──
     async function deleteSource(id) {
-        if (!confirm('削除しますか？')) return;
+        if (!confirm('Delete this source?')) return;
         await fetch('/api/sources/' + id, { method: 'DELETE' });
         document.getElementById('src-' + id)?.remove();
     }
@@ -373,7 +365,7 @@
     async function loadSources() {
         const btn = document.getElementById('load-btn');
         const loaderModel = 'nemotron';
-        btn.textContent = '⏳ ロード中...';
+        btn.textContent = 'Loading...';
         btn.classList.add('loading');
         btn.disabled = true;
         try {
@@ -383,14 +375,14 @@
                 body: JSON.stringify({ loader_model: loaderModel }),
             });
             const data = await r.json();
-            btn.textContent = `✓ ${data.loaded}件ロード完了`;
+            btn.textContent = `Done — ${data.loaded} loaded`;
             btn.classList.remove('loading');
             setTimeout(() => location.reload(), 1000);
         } catch (e) {
-            btn.textContent = '⚡ ロード';
+            btn.textContent = 'Load Sources';
             btn.classList.remove('loading');
             btn.disabled = false;
-            alert('ロードエラー: ' + e.message);
+            alert('Load error: ' + e.message);
         }
     }
 
@@ -401,7 +393,6 @@
         const r = await fetch('/api/chatlogs', { method: 'POST', body: form });
         const data = await r.json();
         currentChatlogId = data.id;
-        // Add to list
         const list = document.getElementById('log-list');
         const div = document.createElement('div');
         div.className = 'log-item active';
@@ -409,17 +400,15 @@
         div.onclick = () => loadChatlog(data.id);
         div.innerHTML = `<span class="title">${data.title}</span>
             <div class="actions">
-                <button onclick="event.stopPropagation();downloadChatlog('${data.id}')" title="ダウンロード">⬇</button>
-                <button onclick="event.stopPropagation();deleteChatlog('${data.id}')" title="削除">✕</button>
+                <button onclick="event.stopPropagation();downloadChatlog('${data.id}')" title="Download">&#11015;</button>
+                <button onclick="event.stopPropagation();deleteChatlog('${data.id}')" title="Delete">✕</button>
             </div>`;
         list.prepend(div);
-        // Clear active from others
         document.querySelectorAll('.log-item').forEach(el => {
             if (el.id !== 'log-' + data.id) el.classList.remove('active');
         });
-        // Clear chat
         document.getElementById('chat-messages').innerHTML =
-            '<div class="msg msg-system">新しいチャットを開始しました</div>';
+            '<div class="msg msg-system">New chat started</div>';
     }
 
     async function loadChatlog(id) {
@@ -431,7 +420,7 @@
         const msgs = await r.json();
         const container = document.getElementById('chat-messages');
         container.innerHTML = '';
-        msgs.forEach(m => appendMessage(m.role, m.content, m.fact_check, m.search_results));
+        msgs.forEach(m => appendMessage(m.role, m.content, null, m.search_results));
         container.scrollTop = container.scrollHeight;
     }
 
@@ -440,13 +429,13 @@
     }
 
     async function deleteChatlog(id) {
-        if (!confirm('削除しますか？')) return;
+        if (!confirm('Delete this chat?')) return;
         await fetch('/api/chatlogs/' + id, { method: 'DELETE' });
         document.getElementById('log-' + id)?.remove();
         if (currentChatlogId === id) {
             currentChatlogId = null;
             document.getElementById('chat-messages').innerHTML =
-                '<div class="msg msg-system">チャットを選択してください</div>';
+                '<div class="msg msg-system">Select a chat to continue</div>';
         }
     }
 
@@ -458,25 +447,13 @@
         const textNode = document.createTextNode(content || '');
         div.appendChild(textNode);
 
-        if (factCheck) {
-            try {
-                const fc = typeof factCheck === 'string' ? JSON.parse(factCheck) : factCheck;
-                if (fc.verdict) {
-                    const badge = document.createElement('div');
-                    badge.className = `factcheck-badge fc-${fc.verdict}`;
-                    badge.textContent = `${fc.verdict} (${Math.round(fc.confidence * 100)}%) — ${fc.explanation || ''}`;
-                    div.appendChild(badge);
-                }
-            } catch {}
-        }
-
         if (searchResults) {
             try {
                 const sr = typeof searchResults === 'string' ? JSON.parse(searchResults) : searchResults;
                 if (sr.length > 0) {
                     const box = document.createElement('div');
                     box.className = 'search-results';
-                    box.innerHTML = '<strong>検索結果:</strong><br>' +
+                    box.innerHTML = '<strong>Search results:</strong><br>' +
                         sr.map(r => `<a href="${r.url}" target="_blank">${r.title}</a>`).join('<br>');
                     div.appendChild(box);
                 }
@@ -493,7 +470,6 @@
         const message = input.value.trim();
         if (!message) return;
 
-        // Auto-create chatlog if none
         if (!currentChatlogId) {
             await newChatlog();
         }
@@ -542,20 +518,14 @@
                         if (data.type === 'chunk') {
                             assistantDiv.firstChild.textContent += data.content;
                             container.scrollTop = container.scrollHeight;
-                        } else if (data.type === 'factcheck' && data.result) {
-                            const fc = data.result;
-                            const badge = document.createElement('div');
-                            badge.className = `factcheck-badge fc-${fc.verdict}`;
-                            badge.textContent = `${fc.verdict} (${Math.round(fc.confidence * 100)}%) — ${fc.explanation || ''}`;
-                            assistantDiv.appendChild(badge);
                         } else if (data.type === 'error') {
-                            assistantDiv.firstChild.textContent += '\n⚠ Error: ' + data.content;
+                            assistantDiv.firstChild.textContent += '\nError: ' + data.content;
                         }
                     } catch {}
                 }
             }
         } catch (e) {
-            assistantDiv.firstChild.textContent += '\n⚠ 接続エラー: ' + e.message;
+            assistantDiv.firstChild.textContent += '\nConnection error: ' + e.message;
         }
 
         isStreaming = false;

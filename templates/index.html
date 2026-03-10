@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -56,9 +56,6 @@
             background: var(--accent); color: #0a0a1a;
         }
         .btn-primary:hover { background: var(--accent-hover); }
-        .btn-sm { padding: 6px 14px; font-size: 12px; }
-        .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
-        .btn-danger:hover { background: var(--danger); color: #fff; }
         .notebooks-grid {
             display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 16px;
@@ -96,15 +93,15 @@
     </div>
     <div class="container">
         <form class="create-bar" onsubmit="createNotebook(event)">
-            <input type="text" id="nb-name" placeholder="ノートブック名を入力..." value="新規ノートブック">
-            <button type="submit" class="btn btn-primary">+ 作成</button>
+            <input type="text" id="nb-name" placeholder="Notebook name..." value="New Notebook">
+            <button type="submit" class="btn btn-primary">+ Create</button>
         </form>
 
         {% if notebooks %}
         <div class="notebooks-grid">
             {% for nb in notebooks %}
             <div class="notebook-card" onclick="location.href='/notebook/{{ nb.id }}'">
-                <button class="delete-btn" onclick="event.stopPropagation();deleteNotebook('{{ nb.id }}')" title="削除">✕</button>
+                <button class="delete-btn" onclick="event.stopPropagation();deleteNotebook('{{ nb.id }}')" title="Delete">✕</button>
                 <h3>{{ nb.name }}</h3>
                 <div class="meta">{{ nb.updated_at }}</div>
             </div>
@@ -112,8 +109,8 @@
         </div>
         {% else %}
         <div class="empty-state">
-            <h2>ノートブックがありません</h2>
-            <p>上のフォームから新規作成してください</p>
+            <h2>No notebooks yet</h2>
+            <p>Create one using the form above</p>
         </div>
         {% endif %}
     </div>
@@ -130,7 +127,7 @@
         location.href = '/notebook/' + data.id;
     }
     async function deleteNotebook(id) {
-        if (!confirm('削除しますか？')) return;
+        if (!confirm('Delete this notebook?')) return;
         await fetch('/api/notebooks/' + id, { method: 'DELETE' });
         location.reload();
     }
