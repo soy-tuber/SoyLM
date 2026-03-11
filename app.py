@@ -1,5 +1,5 @@
 """
-SoyLM - Local-first NotebookLM alternative
+SoyLM - Local-first RAG tool
 FastAPI + Jinja2 / SSE streaming / Gemini + Nemotron
 """
 

@@ -1,6 +1,6 @@
 # SoyLM
 
-Local-first NotebookLM alternative powered by [Nemotron-Nano-9B-v2-Japanese](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese) via vLLM.
+Local-first RAG tool powered by [Nemotron-Nano-9B-v2-Japanese](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese) via vLLM.
 
 ## What it does
 
