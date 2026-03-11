@@ -67,7 +67,6 @@ Open `http://localhost:8080`
 |---|---|---|
 | `NEMOTRON_BASE` | `http://localhost:8000/v1` | vLLM endpoint |
 | `NEMOTRON_MODEL` | `nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese` | Model name |
-| `GEMINI_API_KEY` | (empty) | Optional, for Gemini fallback (dead code) |
 
 ## Usage
 

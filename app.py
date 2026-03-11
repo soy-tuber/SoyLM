@@ -1,6 +1,6 @@
 """
 SoyLM - Local-first RAG tool
-FastAPI + Jinja2 / SSE streaming / Gemini + Nemotron
+FastAPI + Jinja2 / SSE streaming / Nemotron (vLLM)
 """
 
 import asyncio
@@ -8,11 +8,10 @@ import json
 import hashlib
 import os
 import sqlite3
-import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 import httpx
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -26,11 +25,6 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 SOURCES_DIR = DATA_DIR / "sources"
 SOURCES_DIR.mkdir(exist_ok=True)
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_PRO_MODEL = "gemini-2.5-pro"
-GEMINI_FLASH_MODEL = "gemini-2.5-flash"
-GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 NEMOTRON_BASE = os.getenv("NEMOTRON_BASE", "http://localhost:8000/v1")
 NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese")
@@ -76,22 +70,22 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now'))
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS sources_fts USING fts5(
-            source_id, filename, raw_text, summary, key_points, flash_analysis,
+            id, filename, raw_text, summary, key_points, flash_analysis,
             content='sources',
             content_rowid='rowid'
         );
         CREATE TRIGGER IF NOT EXISTS sources_ai AFTER INSERT ON sources BEGIN
-            INSERT INTO sources_fts(rowid, source_id, filename, raw_text, summary, key_points, flash_analysis)
+            INSERT INTO sources_fts(rowid, id, filename, raw_text, summary, key_points, flash_analysis)
             VALUES (new.rowid, new.id, new.filename, new.raw_text, new.summary, new.key_points, new.flash_analysis);
         END;
         CREATE TRIGGER IF NOT EXISTS sources_ad AFTER DELETE ON sources BEGIN
-            INSERT INTO sources_fts(sources_fts, rowid, source_id, filename, raw_text, summary, key_points, flash_analysis)
+            INSERT INTO sources_fts(sources_fts, rowid, id, filename, raw_text, summary, key_points, flash_analysis)
             VALUES ('delete', old.rowid, old.id, old.filename, old.raw_text, old.summary, old.key_points, old.flash_analysis);
         END;
         CREATE TRIGGER IF NOT EXISTS sources_au AFTER UPDATE ON sources BEGIN
-            INSERT INTO sources_fts(sources_fts, rowid, source_id, filename, raw_text, summary, key_points, flash_analysis)
+            INSERT INTO sources_fts(sources_fts, rowid, id, filename, raw_text, summary, key_points, flash_analysis)
             VALUES ('delete', old.rowid, old.id, old.filename, old.raw_text, old.summary, old.key_points, old.flash_analysis);
-            INSERT INTO sources_fts(rowid, source_id, filename, raw_text, summary, key_points, flash_analysis)
+            INSERT INTO sources_fts(rowid, id, filename, raw_text, summary, key_points, flash_analysis)
             VALUES (new.rowid, new.id, new.filename, new.raw_text, new.summary, new.key_points, new.flash_analysis);
         END;
         CREATE TABLE IF NOT EXISTS chatlogs (
@@ -129,46 +123,6 @@ def estimate_tokens(text: str) -> int:
 
 def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
-
-
-# ─── Gemini API ───────────────────────────────────────────────────
-async def gemini_generate(prompt: str, model: str = GEMINI_FLASH_MODEL,
-                          system: str = "", max_tokens: int = 8192) -> str:
-    """Non-streaming Gemini call (for Flash preprocessing)."""
-    url = f"{GEMINI_BASE}/{model}:generateContent?key={GEMINI_API_KEY}"
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.3},
-    }
-    if system:
-        body["systemInstruction"] = {"parts": [{"text": system}]}
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(url, json=body)
-        r.raise_for_status()
-        data = r.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-
-
-async def gemini_stream(prompt: str, model: str = GEMINI_PRO_MODEL,
-                        system: str = "", max_tokens: int = 16384) -> AsyncGenerator[str, None]:
-    """Streaming Gemini call via SSE."""
-    url = f"{GEMINI_BASE}/{model}:streamGenerateContent?alt=sse&key={GEMINI_API_KEY}"
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7},
-    }
-    if system:
-        body["systemInstruction"] = {"parts": [{"text": system}]}
-    async with httpx.AsyncClient(timeout=300) as client:
-        async with client.stream("POST", url, json=body) as resp:
-            async for line in resp.aiter_lines():
-                if line.startswith("data: "):
-                    try:
-                        chunk = json.loads(line[6:])
-                        text = chunk["candidates"][0]["content"]["parts"][0]["text"]
-                        yield text
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
 
 
 # ─── Nemotron (vLLM OpenAI compat) ───────────────────────────────
@@ -212,32 +166,23 @@ async def nemotron_stream(prompt: str, system: str = "",
         "stream": True,
         "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
-    in_thinking = False
+    thinking_started = False
     async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream("POST", url, json=body) as resp:
             async for line in resp.aiter_lines():
                 if line.startswith("data: ") and line.strip() != "data: [DONE]":
                     try:
                         chunk = json.loads(line[6:])
-                        delta = chunk["choices"][0]["delta"].get("content", "")
-                        if delta:
-                            # Handle thinking tags
-                            if "<think>" in delta:
-                                in_thinking = True
-                                delta = delta.replace("<think>", "")
-                                if delta:
-                                    yield f"💭 {delta}"
-                                continue
-                            if "</think>" in delta:
-                                in_thinking = False
-                                delta = delta.replace("</think>", "")
-                                if delta:
-                                    yield f"\n\n{delta}"
-                                continue
-                            if in_thinking:
-                                yield delta
-                            else:
-                                yield delta
+                        delta = chunk["choices"][0]["delta"]
+                        # reasoning_content: separated by vLLM reasoning parser
+                        reasoning = delta.get("reasoning_content", "")
+                        content = delta.get("content", "")
+                        if reasoning:
+                            if not thinking_started:
+                                thinking_started = True
+                            yield {"type": "thinking", "content": reasoning}
+                        if content:
+                            yield {"type": "text", "content": content}
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
 
@@ -262,41 +207,6 @@ async def ddg_search(query: str, max_results: int = 5) -> list[dict]:
     except Exception as e:
         print(f"DDG search error: {e}")
     return results[:max_results]
-
-
-# ─── Fact Checker (Gemini Flash) ──────────────────────────────────
-async def fact_check(claim: str, context: str = "") -> dict:
-    """Use Gemini Flash to fact-check a claim against context + DDG."""
-    search_results = await ddg_search(claim, max_results=3)
-    search_context = "\n".join(
-        f"- {r['title']}: {r['snippet']}" for r in search_results
-    )
-    prompt = f"""あなたはファクトチェッカーです。以下の主張を検証してください。
-
-【主張】
-{claim}
-
-【提供されたコンテキスト】
-{context[:3000] if context else 'なし'}
-
-【Web検索結果】
-{search_context if search_context else 'なし'}
-
-以下のJSON形式で回答してください:
-{{"verdict": "正確/不正確/要検証/情報不足", "confidence": 0.0-1.0, "explanation": "理由", "sources": ["参照元"]}}
-JSONのみ出力。"""
-
-    try:
-        raw = await gemini_generate(prompt, model=GEMINI_FLASH_MODEL, max_tokens=1024)
-        # strip markdown fences
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-        if raw.endswith("```"):
-            raw = raw[:-3]
-        return json.loads(raw.strip())
-    except Exception as e:
-        return {"verdict": "エラー", "confidence": 0, "explanation": str(e), "sources": []}
 
 
 # ─── URL / YouTube fetch ─────────────────────────────────────────
@@ -491,9 +401,8 @@ async def _fetch_url_with_depth(url: str, max_depth: int = 2) -> str:
 
 
 # ─── Flash Source Loader ──────────────────────────────────────────
-async def flash_load_source(source_id: str, raw_text: str, filename: str,
-                            loader_model: str = "gemini-flash"):
-    """Analyze and structure source data using specified model."""
+async def flash_load_source(source_id: str, raw_text: str, filename: str):
+    """Analyze and structure source data using Nemotron."""
     prompt = f"""以下の文書を分析してください。
 
 【ファイル名】{filename}
@@ -512,10 +421,7 @@ async def flash_load_source(source_id: str, raw_text: str, filename: str,
 JSONのみ出力。"""
 
     try:
-        if loader_model == "nemotron":
-            raw = await nemotron_generate(prompt, max_tokens=2048)
-        else:
-            raw = await gemini_generate(prompt, model=GEMINI_FLASH_MODEL, max_tokens=2048)
+        raw = await nemotron_generate(prompt, max_tokens=2048)
         raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -531,6 +437,8 @@ JSONのみ出力。"""
             "language": "unknown",
         }
 
+    # Store analysis + full text together
+    analysis["full_text"] = raw_text[:100000]
     db = get_db()
     db.execute("""
         UPDATE sources SET
@@ -550,19 +458,50 @@ JSONのみ出力。"""
 
 
 # ─── RAG Search ───────────────────────────────────────────────────
-def search_sources(notebook_id: str, query: str, limit: int = 10) -> list[dict]:
-    """FTS5 search across loaded sources."""
+async def _extract_search_keywords(query: str) -> str:
+    """Use Nemotron to extract bilingual (EN+JA) search keywords from user query."""
+    prompt = f"""Extract search keywords from the following question.
+Output English keywords AND Japanese keywords, comma-separated, nothing else.
+Example: Nissan, EV, electric vehicle, patent, 日産, 電気自動車, 特許
+
+Question: {query}
+Keywords:"""
+    try:
+        raw = await nemotron_generate(prompt, max_tokens=128)
+        return raw.strip()
+    except Exception:
+        return query
+
+
+def _keywords_to_fts5(keywords: str) -> str:
+    """Convert comma-separated keywords to FTS5 MATCH query."""
+    import re
+    tokens = re.split(r'[,\s]+', keywords)
+    terms = []
+    for t in tokens:
+        cleaned = re.sub(r'[^\w]', '', t)
+        if cleaned and len(cleaned) > 1:
+            terms.append(f'"{cleaned}"')
+    if not terms:
+        return '""'
+    return ' OR '.join(terms)
+
+
+async def search_sources(notebook_id: str, query: str, limit: int = 10) -> list[dict]:
+    """FTS5 search: extract bilingual keywords via LLM, then search."""
+    keywords = await _extract_search_keywords(query)
     db = get_db()
+    fts_query = _keywords_to_fts5(keywords)
     rows = db.execute("""
         SELECT s.id, s.filename, s.summary, s.key_points, s.flash_analysis,
                s.raw_text, s.token_estimate,
                rank
         FROM sources_fts fts
-        JOIN sources s ON s.id = fts.source_id
+        JOIN sources s ON s.id = fts.id
         WHERE sources_fts MATCH ? AND s.notebook_id = ? AND s.loaded = 1
         ORDER BY rank
         LIMIT ?
-    """, (query, notebook_id, limit)).fetchall()
+    """, (fts_query, notebook_id, limit)).fetchall()
     db.close()
     return [dict(r) for r in rows]
 
@@ -580,27 +519,37 @@ def get_all_loaded_sources(notebook_id: str) -> list[dict]:
 
 
 # ─── Chat context builder ────────────────────────────────────────
-def build_rag_context(notebook_id: str, query: str, full_context: bool = False) -> str:
-    """Build context string for LLM prompt."""
-    if full_context:
+def _format_source(filename: str, flash_analysis: str, summary: str = "") -> str:
+    """Format a source's flash_analysis into readable text for LLM."""
+    try:
+        data = json.loads(flash_analysis) if flash_analysis else {}
+    except json.JSONDecodeError:
+        return f"[{filename}]\n{flash_analysis or summary}"
+    parts = [f"[{filename}]"]
+    if data.get("summary"):
+        parts.append(f"Summary: {data['summary']}")
+    if data.get("key_points"):
+        kp = data["key_points"]
+        if isinstance(kp, list):
+            parts.append("Key points:\n" + "\n".join(f"- {p}" for p in kp))
+        else:
+            parts.append(f"Key points: {kp}")
+    if data.get("full_text"):
+        parts.append(f"\nFull text:\n{data['full_text']}")
+    return "\n".join(parts)
+
+
+async def build_rag_context(notebook_id: str, query: str) -> str:
+    """Build context string for LLM prompt via FTS5 search."""
+    results = await search_sources(notebook_id, query, limit=5)
+    if not results:
         sources = get_all_loaded_sources(notebook_id)
-        # Use flash_analysis (compressed) instead of raw_text
-        parts = []
-        for s in sources:
-            analysis = s.get("flash_analysis", "")
-            parts.append(f"[{s['filename']}]\n{analysis}")
-        return "\n\n---\n\n".join(parts)
-    else:
-        results = search_sources(notebook_id, query, limit=5)
-        if not results:
-            # Fallback: return all summaries
-            sources = get_all_loaded_sources(notebook_id)
-            parts = [f"[{s['filename']}] {s.get('summary', '')}" for s in sources]
-            return "\n".join(parts)
-        parts = []
-        for r in results:
-            parts.append(f"[{r['filename']}]\n{r.get('flash_analysis', r.get('summary', ''))}")
-        return "\n\n---\n\n".join(parts)
+        parts = [f"[{s['filename']}] {s.get('summary', '')}" for s in sources]
+        return "\n".join(parts)
+    parts = []
+    for r in results:
+        parts.append(_format_source(r['filename'], r.get('flash_analysis', ''), r.get('summary', '')))
+    return "\n\n---\n\n".join(parts)
 
 
 # ─── Routes: Pages ────────────────────────────────────────────────
@@ -736,25 +685,45 @@ async def upload_source(
 
 @app.post("/api/sources/load/{notebook_id}")
 async def load_all_sources(notebook_id: str, request: Request):
-    """Process all unloaded sources using specified model."""
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    loader_model = body.get("loader_model", "gemini-flash")
-
+    """Process sources using Nemotron. Unloaded sources get full analysis.
+    Already-loaded sources without full_text get backfilled."""
     db = get_db()
+    # Unloaded: full analysis
     unloaded = db.execute(
         "SELECT id, filename, raw_text FROM sources WHERE notebook_id = ? AND loaded = 0",
         (notebook_id,)
     ).fetchall()
+    # Already loaded but missing full_text in flash_analysis: backfill
+    loaded = db.execute(
+        "SELECT id, filename, raw_text, flash_analysis FROM sources WHERE notebook_id = ? AND loaded = 1",
+        (notebook_id,)
+    ).fetchall()
     db.close()
 
+    # Backfill full_text into existing flash_analysis
+    backfilled = 0
+    for src in loaded:
+        fa = src["flash_analysis"] or ""
+        if '"full_text"' not in fa and src["raw_text"]:
+            try:
+                analysis = json.loads(fa) if fa else {}
+            except json.JSONDecodeError:
+                analysis = {}
+            analysis["full_text"] = src["raw_text"][:100000]
+            db = get_db()
+            db.execute(
+                "UPDATE sources SET flash_analysis = ? WHERE id = ?",
+                (json.dumps(analysis, ensure_ascii=False), src["id"])
+            )
+            db.commit()
+            db.close()
+            backfilled += 1
+
+    # Process unloaded sources
     results = []
     tasks = []
     for src in unloaded:
-        tasks.append(flash_load_source(src["id"], src["raw_text"], src["filename"], loader_model))
+        tasks.append(flash_load_source(src["id"], src["raw_text"], src["filename"]))
 
     if tasks:
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -764,8 +733,9 @@ async def load_all_sources(notebook_id: str, request: Request):
 
     return JSONResponse({
         "loaded": loaded_count,
+        "backfilled": backfilled,
         "errors": errors,
-        "total": len(unloaded),
+        "total": len(unloaded) + len(loaded),
     })
 
 
@@ -785,14 +755,11 @@ async def chat_stream(request: Request):
     body = await request.json()
     notebook_id = body.get("notebook_id", "")
     message = body.get("message", "")
-    model = body.get("model", "gemini-flash")  # gemini-flash / gemini-pro / nemotron
-    full_context = body.get("full_context", False)
     chatlog_id = body.get("chatlog_id", "")
     enable_search = body.get("enable_search", False)
-    enable_factcheck = body.get("enable_factcheck", False)
 
     # Build RAG context
-    rag_context = build_rag_context(notebook_id, message, full_context) if notebook_id else ""
+    rag_context = await build_rag_context(notebook_id, message) if notebook_id else ""
 
     # Optional DDG search
     search_data = []
@@ -808,8 +775,7 @@ async def chat_stream(request: Request):
     # System prompt
     system = """You are an expert research assistant.
 Answer accurately based on the provided source data.
-If information is not in the sources, clearly state it is speculation.
-Respond in the same language as the user's question."""
+If information is not in the sources, clearly state it is speculation."""
 
     # Build user prompt
     prompt_parts = []
@@ -834,33 +800,25 @@ Respond in the same language as the user's question."""
     # Stream response
     async def event_stream() -> AsyncGenerator[str, None]:
         full_response = []
+        full_thinking = []
         try:
-            if model == "gemini-pro":
-                gen = gemini_stream(full_prompt, model=GEMINI_PRO_MODEL, system=system)
-            elif model == "gemini-flash":
-                gen = gemini_stream(full_prompt, model=GEMINI_FLASH_MODEL, system=system)
-            else:
-                gen = nemotron_stream(full_prompt, system=system)
+            gen = nemotron_stream(full_prompt, system=system)
 
             async for chunk in gen:
-                full_response.append(chunk)
-                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
-
-            # Fact check if enabled
-            fact_result = None
-            if enable_factcheck and full_response:
-                response_text = "".join(full_response)
-                fact_result = await fact_check(response_text[:1000], rag_context[:2000])
-                yield f"data: {json.dumps({'type': 'factcheck', 'result': fact_result}, ensure_ascii=False)}\n\n"
+                if chunk["type"] == "thinking":
+                    full_thinking.append(chunk["content"])
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': chunk['content']}, ensure_ascii=False)}\n\n"
+                else:
+                    full_response.append(chunk["content"])
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk['content']}, ensure_ascii=False)}\n\n"
 
             # Save assistant message
             if chatlog_id:
                 response_text = "".join(full_response)
                 db = get_db()
                 db.execute(
-                    "INSERT INTO messages (id, chatlog_id, role, content, model, fact_check) VALUES (?, ?, ?, ?, ?, ?)",
-                    (uid(), chatlog_id, "assistant", response_text, model,
-                     json.dumps(fact_result, ensure_ascii=False) if fact_result else None)
+                    "INSERT INTO messages (id, chatlog_id, role, content, model) VALUES (?, ?, ?, ?, ?)",
+                    (uid(), chatlog_id, "assistant", response_text, "nemotron")
                 )
                 db.execute("UPDATE chatlogs SET updated_at = datetime('now') WHERE id = ?", (chatlog_id,))
                 db.commit()
@@ -938,14 +896,6 @@ async def search_api(q: str = ""):
         return JSONResponse([])
     results = await ddg_search(q)
     return JSONResponse(results)
-
-
-# ─── Fact check API endpoint ─────────────────────────────────────
-@app.post("/api/factcheck")
-async def factcheck_api(request: Request):
-    body = await request.json()
-    result = await fact_check(body.get("claim", ""), body.get("context", ""))
-    return JSONResponse(result)
 
 
 # ─── Health ───────────────────────────────────────────────────────

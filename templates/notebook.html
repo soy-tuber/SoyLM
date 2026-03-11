@@ -133,6 +133,14 @@
             align-self: center; background: transparent; color: var(--text-dim);
             font-size: 12px; font-style: italic;
         }
+        .thinking {
+            margin-bottom: 8px; font-size: 12px; color: var(--text-dim);
+        }
+        .thinking summary { cursor: pointer; }
+        .thinking pre {
+            margin: 4px 0 0; white-space: pre-wrap; font-size: 11px;
+            max-height: 200px; overflow-y: auto; color: var(--text-dim);
+        }
         .search-results {
             margin-top: 8px; padding: 8px 12px; background: var(--bg-secondary);
             border-radius: var(--radius); font-size: 12px;
@@ -233,7 +241,16 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+        .msg-assistant { line-height: 1.6; }
+        .msg-assistant h1, .msg-assistant h2, .msg-assistant h3 { margin: 8px 0 4px; }
+        .msg-assistant p { margin: 4px 0; }
+        .msg-assistant ul, .msg-assistant ol { margin: 4px 0; padding-left: 20px; }
+        .msg-assistant code { background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+        .msg-assistant pre { background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; overflow-x: auto; }
+        .msg-assistant pre code { background: none; padding: 0; }
+        .msg-assistant blockquote { border-left: 3px solid var(--accent); padding-left: 10px; margin: 4px 0; color: var(--text-dim); }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
     <!-- Header -->
@@ -272,12 +289,6 @@
         <!-- CENTER: Chat -->
         <div class="col-chat">
             <div class="chat-toolbar">
-                <select id="model-select">
-                    <option value="nemotron">Nemotron (Local)</option>
-                </select>
-                <label class="toggle">
-                    <input type="checkbox" id="full-context"> Full Context
-                </label>
                 <label class="toggle">
                     <input type="checkbox" id="enable-search"> Web Search
                 </label>
@@ -364,18 +375,16 @@
 
     async function loadSources() {
         const btn = document.getElementById('load-btn');
-        const loaderModel = 'nemotron';
         btn.textContent = 'Loading...';
         btn.classList.add('loading');
         btn.disabled = true;
         try {
             const r = await fetch('/api/sources/load/' + NB_ID, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ loader_model: loaderModel }),
             });
             const data = await r.json();
-            btn.textContent = `Done — ${data.loaded} loaded`;
+            const total = (data.loaded || 0) + (data.backfilled || 0);
+            btn.textContent = `Done — ${data.loaded || 0} loaded, ${data.backfilled || 0} updated`;
             btn.classList.remove('loading');
             setTimeout(() => location.reload(), 1000);
         } catch (e) {
@@ -440,12 +449,18 @@
     }
 
     // ── Chat ──
-    function appendMessage(role, content, factCheck, searchResults) {
+    function appendMessage(role, content, searchResults) {
         const container = document.getElementById('chat-messages');
         const div = document.createElement('div');
         div.className = `msg msg-${role}`;
-        const textNode = document.createTextNode(content || '');
-        div.appendChild(textNode);
+        if (role === 'assistant' && content) {
+            const contentDiv = document.createElement('div');
+            contentDiv.innerHTML = marked.parse(content);
+            div.appendChild(contentDiv);
+        } else {
+            const textNode = document.createTextNode(content || '');
+            div.appendChild(textNode);
+        }
 
         if (searchResults) {
             try {
@@ -480,6 +495,7 @@
         const assistantDiv = appendMessage('assistant', '');
         const container = document.getElementById('chat-messages');
         container.scrollTop = container.scrollHeight;
+        let streamedText = '';
 
         isStreaming = true;
         document.getElementById('send-btn').disabled = true;
@@ -491,11 +507,8 @@
                 body: JSON.stringify({
                     notebook_id: NB_ID,
                     message: message,
-                    model: document.getElementById('model-select').value,
-                    full_context: document.getElementById('full-context').checked,
                     chatlog_id: currentChatlogId,
                     enable_search: document.getElementById('enable-search').checked,
-                    enable_factcheck: false,
                 }),
             });
 
@@ -515,17 +528,35 @@
                     if (!line.startsWith('data: ')) continue;
                     try {
                         const data = JSON.parse(line.slice(6));
-                        if (data.type === 'chunk') {
-                            assistantDiv.firstChild.textContent += data.content;
+                        if (data.type === 'thinking') {
+                            if (!assistantDiv.querySelector('.thinking')) {
+                                const details = document.createElement('details');
+                                details.className = 'thinking';
+                                details.innerHTML = '<summary>Thinking...</summary><pre></pre>';
+                                assistantDiv.insertBefore(details, assistantDiv.firstChild);
+                            }
+                            assistantDiv.querySelector('.thinking pre').textContent += data.content;
+                            container.scrollTop = container.scrollHeight;
+                        } else if (data.type === 'chunk') {
+                            streamedText += data.content;
+                            assistantDiv.lastChild.textContent = streamedText;
                             container.scrollTop = container.scrollHeight;
                         } else if (data.type === 'error') {
-                            assistantDiv.firstChild.textContent += '\nError: ' + data.content;
+                            streamedText += '\nError: ' + data.content;
+                            assistantDiv.lastChild.textContent = streamedText;
                         }
                     } catch {}
                 }
             }
         } catch (e) {
-            assistantDiv.firstChild.textContent += '\nConnection error: ' + e.message;
+            streamedText += '\nConnection error: ' + e.message;
+        }
+
+        // Render markdown after stream completes
+        if (streamedText) {
+            const mdDiv = document.createElement('div');
+            mdDiv.innerHTML = marked.parse(streamedText);
+            assistantDiv.replaceChild(mdDiv, assistantDiv.lastChild);
         }
 
         isStreaming = false;
