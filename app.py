@@ -196,7 +196,7 @@ async def ddg_search(query: str, max_results: int = 5) -> list[dict]:
         loop = asyncio.get_event_loop()
         def _search():
             ddgs = DDGS()
-            return ddgs.text(query, region="jp-jp", safesearch="off", max_results=max_results)
+            return ddgs.text(query, region="wt-wt", safesearch="off", max_results=max_results)
         raw = await loop.run_in_executor(None, _search)
         for r in raw:
             results.append({
@@ -823,6 +823,14 @@ If information is not in the sources, clearly state it is speculation."""
                 db.execute("UPDATE chatlogs SET updated_at = datetime('now') WHERE id = ?", (chatlog_id,))
                 db.commit()
                 db.close()
+
+            # Append web search sources section
+            if search_data:
+                sources_md = "\n\n---\n\n**Web Sources**\n\n"
+                for r in search_data:
+                    sources_md += f"- [{r['title']}]({r['url']})\n  {r['snippet'][:150]}\n\n"
+                full_response.append(sources_md)
+                yield f"data: {json.dumps({'type': 'chunk', 'content': sources_md}, ensure_ascii=False)}\n\n"
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
