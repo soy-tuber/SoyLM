@@ -1,6 +1,6 @@
 # SoyLM
 
-Local-first RAG tool powered by [Nemotron-Nano-9B-v2-Japanese](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese) via vLLM.
+Local-first RAG tool powered by any OpenAI-compatible LLM — [Nemotron-Nano-9B-v2-Japanese](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese) via vLLM, [MiniMax](https://www.minimaxi.com), OpenAI, and more.
 
 ## What it does
 
@@ -9,7 +9,7 @@ Upload documents, URLs, or YouTube videos as sources. SoyLM analyzes them with a
 ## Features
 
 - **Source ingestion** — Files, web URLs (with Playwright JS rendering fallback), YouTube transcripts
-- **Local LLM** — Nemotron-Nano-9B via vLLM (OpenAI-compatible API), thinking mode for inference
+- **Flexible LLM backend** — Any OpenAI-compatible API: local vLLM, MiniMax, OpenAI, and more
 - **RAG search** — SQLite FTS5 full-text search with BM25 ranking
 - **Web search** — DuckDuckGo integration for supplementing source data
 - **SSE streaming** — Real-time streamed responses
@@ -26,7 +26,7 @@ Browser (Jinja2 SSR + vanilla JS)
         │
         ▼
 FastAPI backend (single file: app.py)
-  ├── Nemotron (vLLM localhost:8000)
+  ├── LLM (any OpenAI-compatible API)
   ├── SQLite (soylm.db) + FTS5
   ├── Playwright (JS-rendered pages)
   ├── youtube-transcript-api
@@ -61,12 +61,42 @@ uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 
 Open `http://localhost:8080`
 
-### Environment variables (optional)
+### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEMOTRON_BASE` | `http://localhost:8000/v1` | vLLM endpoint |
-| `NEMOTRON_MODEL` | `nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese` | Model name |
+| `LLM_BASE_URL` | `http://localhost:8000/v1` | LLM API endpoint |
+| `LLM_MODEL` | `nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese` | Model name |
+| `LLM_API_KEY` | *(empty)* | API key (required for cloud providers) |
+| `NEMOTRON_BASE` | — | Legacy alias for `LLM_BASE_URL` |
+| `NEMOTRON_MODEL` | — | Legacy alias for `LLM_MODEL` |
+
+### Provider examples
+
+**Local vLLM (default)**
+
+```bash
+vllm serve nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese
+uvicorn app:app --host 0.0.0.0 --port 8080 --reload
+```
+
+**MiniMax**
+
+```bash
+export LLM_BASE_URL=https://api.minimax.io/v1
+export LLM_MODEL=MiniMax-M2.5
+export LLM_API_KEY=your-minimax-api-key
+uvicorn app:app --host 0.0.0.0 --port 8080 --reload
+```
+
+**OpenAI**
+
+```bash
+export LLM_BASE_URL=https://api.openai.com/v1
+export LLM_MODEL=gpt-4o
+export LLM_API_KEY=sk-...
+uvicorn app:app --host 0.0.0.0 --port 8080 --reload
+```
 
 ## Usage
 

@@ -26,8 +26,14 @@ DATA_DIR.mkdir(exist_ok=True)
 SOURCES_DIR = DATA_DIR / "sources"
 SOURCES_DIR.mkdir(exist_ok=True)
 
-NEMOTRON_BASE = os.getenv("NEMOTRON_BASE", "http://localhost:8000/v1")
-NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese")
+# LLM provider config (generic env vars with Nemotron fallback)
+LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("NEMOTRON_BASE", "http://localhost:8000/v1")
+LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+
+# Backward compat aliases
+NEMOTRON_BASE = LLM_BASE_URL
+NEMOTRON_MODEL = LLM_MODEL
 
 DDG_BASE = "https://api.duckduckgo.com/"
 
@@ -125,25 +131,41 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-# ─── Nemotron (vLLM OpenAI compat) ───────────────────────────────
+# ─── LLM helpers ─────────────────────────────────────────────────
+def _is_vllm_endpoint() -> bool:
+    """Check if the configured endpoint is a local vLLM server."""
+    return "localhost" in LLM_BASE_URL or "127.0.0.1" in LLM_BASE_URL
+
+
+def _llm_headers() -> dict:
+    """Build request headers, including Authorization when an API key is set."""
+    headers = {"Content-Type": "application/json"}
+    if LLM_API_KEY:
+        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+    return headers
+
+
+# ─── LLM (OpenAI-compatible) ─────────────────────────────────────
 async def nemotron_generate(prompt: str, system: str = "",
                             max_tokens: int = 8192) -> str:
-    """Non-streaming Nemotron call (for loading, no thinking)."""
-    url = f"{NEMOTRON_BASE}/chat/completions"
+    """Non-streaming LLM call (for loading, no thinking)."""
+    url = f"{LLM_BASE_URL}/chat/completions"
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     body = {
-        "model": NEMOTRON_MODEL,
+        "model": LLM_MODEL,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.3,
         "stream": False,
-        "chat_template_kwargs": {"enable_thinking": False},
     }
+    # vLLM-specific: enable_thinking control
+    if _is_vllm_endpoint():
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(url, json=body)
+        r = await client.post(url, json=body, headers=_llm_headers())
         r.raise_for_status()
         data = r.json()
         return data["choices"][0]["message"]["content"]
@@ -152,23 +174,25 @@ async def nemotron_generate(prompt: str, system: str = "",
 async def nemotron_stream(prompt: str, system: str = "",
                           max_tokens: int = 16384,
                           enable_thinking: bool = True) -> AsyncGenerator[str, None]:
-    """Streaming via vLLM OpenAI-compatible endpoint with thinking support."""
-    url = f"{NEMOTRON_BASE}/chat/completions"
+    """Streaming via OpenAI-compatible endpoint with optional thinking support."""
+    url = f"{LLM_BASE_URL}/chat/completions"
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     body = {
-        "model": NEMOTRON_MODEL,
+        "model": LLM_MODEL,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.7,
         "stream": True,
-        "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
+    # vLLM-specific: enable_thinking control
+    if _is_vllm_endpoint():
+        body["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
     thinking_started = False
     async with httpx.AsyncClient(timeout=300) as client:
-        async with client.stream("POST", url, json=body) as resp:
+        async with client.stream("POST", url, json=body, headers=_llm_headers()) as resp:
             async for line in resp.aiter_lines():
                 if line.startswith("data: ") and line.strip() != "data: [DONE]":
                     try:
