@@ -82,11 +82,11 @@ Open `http://localhost:8080`
 
 1. Create a notebook
 2. Add sources (files, URLs, YouTube links)
-3. Click **Load Sources**
-4. Ask questions
+3. Click **Load Sources** to analyze with LLM
+4. Ask a question — matched local sources + web results are shown with checkboxes
+5. Select relevant sources and click **Execute** to generate
 
-Toggle **Full Context** to feed all source analyses into the prompt.
-Toggle **Web Search** to enable tool calling — Nemotron autonomously decides when to search DuckDuckGo.
+Toggle **Web Search** to include DuckDuckGo results alongside local sources.
 
 ## File structure
 
