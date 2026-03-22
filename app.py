@@ -39,6 +39,18 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "2048"))
 
 DDG_BASE = "https://api.duckduckgo.com/"
 
+# System prompt — accuracy-focused, grounding rules
+DEFAULT_SYSTEM_PROMPT = """You are a research assistant grounded in the user's sources.
+
+Rules:
+- Cite sources using [1], [2] etc. matching the order they appear in 【ソースデータ】.
+- When combining multiple sources, cite all: [1, 3].
+- If the answer requires information NOT in the sources, explicitly state: "This is not in the provided sources" before answering from general knowledge.
+- If the sources lack relevant information, say so honestly.
+- If the query is ambiguous, ask the user to clarify before answering.
+- Respond in the same language the user wrote their question in.
+- When web search is available, use the ddg_search tool to find current information if the sources don't cover it."""
+
 # ─── Tool Definitions (OpenAI function calling format) ────────
 TOOL_DDG_SEARCH = {
     "type": "function",
@@ -652,6 +664,33 @@ async def build_rag_context(notebook_id: str, query: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _build_full_context(notebook_id: str) -> str:
+    """Build full source context string for a notebook (all loaded sources)."""
+    sources = get_all_loaded_sources(notebook_id)
+    parts = []
+    for i, s in enumerate(sources, 1):
+        parts.append(_format_source(s['filename'], s.get('flash_analysis', ''), s.get('summary', '')))
+    return "\n\n---\n\n".join(parts)
+
+
+async def warmup_prefix_cache(notebook_id: str):
+    """Send a minimal request to vLLM to populate the KV prefix cache.
+    The system prompt + full source context becomes a cached prefix.
+    Subsequent chat requests sharing this prefix skip re-computation."""
+    context = _build_full_context(notebook_id)
+    if not context:
+        return
+    prefix_prompt = f"【ソースデータ】\n{context}\n\n【質問】\nReady."
+    try:
+        await nemotron_generate(
+            prompt=prefix_prompt,
+            system=DEFAULT_SYSTEM_PROMPT,
+            max_tokens=1,  # minimal generation, just warm the cache
+        )
+    except Exception as e:
+        print(f"Prefix cache warmup failed (non-critical): {e}")
+
+
 # ─── Routes: Pages ────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -847,6 +886,9 @@ async def load_all_sources(notebook_id: str, request: Request):
     loaded_count = sum(1 for r in results if not isinstance(r, Exception))
     errors = [str(r) for r in results if isinstance(r, Exception)]
 
+    # Warm up vLLM prefix cache with full context (fire-and-forget)
+    asyncio.create_task(warmup_prefix_cache(notebook_id))
+
     return JSONResponse({
         "loaded": loaded_count,
         "backfilled": backfilled,
@@ -896,18 +938,8 @@ async def chat_stream(request: Request):
     # Build RAG context
     rag_context = await build_rag_context(notebook_id, message) if notebook_id else ""
 
-    # System prompt — accuracy-focused, inspired by NotebookLM grounding rules
-    default_system = """You are a research assistant grounded in the user's sources.
-
-Rules:
-- Cite sources using [1], [2] etc. matching the order they appear in 【ソースデータ】.
-- When combining multiple sources, cite all: [1, 3].
-- If the answer requires information NOT in the sources, explicitly state: "This is not in the provided sources" before answering from general knowledge.
-- If the sources lack relevant information, say so honestly.
-- If the query is ambiguous, ask the user to clarify before answering.
-- Respond in the same language the user wrote their question in.
-- When web search is available, use the ddg_search tool to find current information if the sources don't cover it."""
-    system = custom_system if custom_system else default_system
+    # System prompt
+    system = custom_system if custom_system else DEFAULT_SYSTEM_PROMPT
 
     # Build user prompt
     prompt_parts = []

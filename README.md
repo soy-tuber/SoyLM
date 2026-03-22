@@ -60,7 +60,8 @@ vllm serve nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese \
   --tool-parser-plugin nemotron_toolcall_parser_streaming.py \
   --reasoning-parser nemotron_nano_v2 \
   --reasoning-parser-plugin nemotron_nano_v2_reasoning_parser.py \
-  --enable-auto-tool-choice
+  --enable-auto-tool-choice \
+  --enable-prefix-caching
 
 # Then start SoyLM
 uvicorn app:app --host 0.0.0.0 --port 8080 --reload
