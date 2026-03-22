@@ -29,6 +29,14 @@ SOURCES_DIR.mkdir(exist_ok=True)
 NEMOTRON_BASE = os.getenv("NEMOTRON_BASE", "http://localhost:8000/v1")
 NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese")
 
+# Token budgets — RTX 5090 32GB, 9B model
+# Input context: generous (sources + history). Output: capped for ~10s response.
+# 9B @ FP16 on 5090: ~80-120 tok/s output → 4096 tokens ≈ 35-50s worst case.
+# With thinking enabled, thinking tokens count toward max_tokens.
+# Streaming max: 4096 (thinking + answer). Agent loop: 2048 (tool decisions only).
+STREAM_MAX_TOKENS = int(os.getenv("STREAM_MAX_TOKENS", "4096"))
+AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "2048"))
+
 DDG_BASE = "https://api.duckduckgo.com/"
 
 # ─── Tool Definitions (OpenAI function calling format) ────────
@@ -252,7 +260,7 @@ async def nemotron_agent_loop(messages: list[dict], tools: list[dict],
     Returns the updated messages list with all tool interactions appended."""
     for _ in range(max_rounds):
         response = await nemotron_generate(
-            prompt="", messages_override=messages, tools=tools, max_tokens=4096
+            prompt="", messages_override=messages, tools=tools, max_tokens=AGENT_MAX_TOKENS
         )
         tool_calls = response.get("tool_calls")
         if not tool_calls:
@@ -888,11 +896,17 @@ async def chat_stream(request: Request):
     # Build RAG context
     rag_context = await build_rag_context(notebook_id, message) if notebook_id else ""
 
-    # System prompt
-    default_system = """You are an expert research assistant.
-Answer accurately based on the provided source data.
-If information is not in the sources, clearly state it is speculation.
-When web search is available, use the ddg_search tool to find current information if the sources don't contain what you need."""
+    # System prompt — accuracy-focused, inspired by NotebookLM grounding rules
+    default_system = """You are a research assistant grounded in the user's sources.
+
+Rules:
+- Cite sources using [1], [2] etc. matching the order they appear in 【ソースデータ】.
+- When combining multiple sources, cite all: [1, 3].
+- If the answer requires information NOT in the sources, explicitly state: "This is not in the provided sources" before answering from general knowledge.
+- If the sources lack relevant information, say so honestly.
+- If the query is ambiguous, ask the user to clarify before answering.
+- Respond in the same language the user wrote their question in.
+- When web search is available, use the ddg_search tool to find current information if the sources don't cover it."""
     system = custom_system if custom_system else default_system
 
     # Build user prompt
@@ -948,6 +962,7 @@ When web search is available, use the ddg_search tool to find current informatio
                 prompt="", system="",
                 messages_override=agent_messages,
                 temperature=temperature,
+                max_tokens=STREAM_MAX_TOKENS,
             )
 
             async for chunk in gen:
