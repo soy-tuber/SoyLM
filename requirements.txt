@@ -6,3 +6,4 @@ python-multipart==0.0.9
 ddgs>=9.0
 youtube-transcript-api>=1.2
 playwright>=1.40
+pymupdf>=1.24

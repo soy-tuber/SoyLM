@@ -193,7 +193,8 @@ async def nemotron_generate_text(prompt: str, system: str = "",
 async def nemotron_stream(prompt: str, system: str = "",
                           max_tokens: int = 16384,
                           enable_thinking: bool = True,
-                          messages_override: list[dict] | None = None) -> AsyncGenerator[str, None]:
+                          messages_override: list[dict] | None = None,
+                          temperature: float = 0.7) -> AsyncGenerator[str, None]:
     """Streaming via vLLM OpenAI-compatible endpoint with thinking support."""
     url = f"{NEMOTRON_BASE}/chat/completions"
     if messages_override:
@@ -207,7 +208,7 @@ async def nemotron_stream(prompt: str, system: str = "",
         "model": NEMOTRON_MODEL,
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": 0.7,
+        "temperature": temperature,
         "stream": True,
         "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
@@ -695,6 +696,17 @@ async def delete_notebook(notebook_id: str):
     return JSONResponse({"ok": True})
 
 
+# ─── PDF Extraction ───────────────────────────────────────────
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract text from PDF using pymupdf."""
+    import pymupdf
+    text_parts = []
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for page in doc:
+            text_parts.append(page.get_text())
+    return "\n\n".join(text_parts)
+
+
 # ─── Routes: Sources ─────────────────────────────────────────────
 @app.post("/api/sources/upload")
 async def upload_source(
@@ -712,7 +724,12 @@ async def upload_source(
         for f in files:
             if not f.filename:
                 continue
-            raw = (await f.read()).decode("utf-8", errors="replace")
+            file_bytes = await f.read()
+            # PDF: extract text with pymupdf
+            if f.filename.lower().endswith(".pdf"):
+                raw = _extract_pdf_text(file_bytes)
+            else:
+                raw = file_bytes.decode("utf-8", errors="replace")
             chash = content_hash(raw)
             # Dedup
             exists = db.execute(
@@ -830,6 +847,20 @@ async def load_all_sources(notebook_id: str, request: Request):
     })
 
 
+@app.get("/api/sources/{source_id}")
+async def get_source(source_id: str):
+    """Get source content for preview."""
+    db = get_db()
+    row = db.execute(
+        "SELECT id, filename, source_type, raw_text, summary, key_points, flash_analysis, loaded, token_estimate FROM sources WHERE id = ?",
+        (source_id,)
+    ).fetchone()
+    db.close()
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(dict(row))
+
+
 @app.delete("/api/sources/{source_id}")
 async def delete_source(source_id: str):
     db = get_db()
@@ -848,15 +879,21 @@ async def chat_stream(request: Request):
     message = body.get("message", "")
     chatlog_id = body.get("chatlog_id", "")
     enable_search = body.get("enable_search", False)
+    custom_system = body.get("system_prompt", "").strip()
+    temperature = body.get("temperature", 0.7)
+
+    # Clamp temperature
+    temperature = max(0.0, min(2.0, float(temperature)))
 
     # Build RAG context
     rag_context = await build_rag_context(notebook_id, message) if notebook_id else ""
 
     # System prompt
-    system = """You are an expert research assistant.
+    default_system = """You are an expert research assistant.
 Answer accurately based on the provided source data.
 If information is not in the sources, clearly state it is speculation.
 When web search is available, use the ddg_search tool to find current information if the sources don't contain what you need."""
+    system = custom_system if custom_system else default_system
 
     # Build user prompt
     prompt_parts = []
@@ -910,6 +947,7 @@ When web search is available, use the ddg_search tool to find current informatio
             gen = nemotron_stream(
                 prompt="", system="",
                 messages_override=agent_messages,
+                temperature=temperature,
             )
 
             async for chunk in gen:

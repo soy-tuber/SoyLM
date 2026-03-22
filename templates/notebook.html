@@ -133,6 +133,11 @@
             align-self: center; background: transparent; color: var(--text-dim);
             font-size: 12px; font-style: italic;
         }
+        .tool-status {
+            margin-bottom: 8px; padding: 6px 10px; font-size: 12px;
+            color: var(--accent); background: var(--accent-dim);
+            border-radius: var(--radius); white-space: pre-wrap;
+        }
         .thinking {
             margin-bottom: 8px; font-size: 12px; color: var(--text-dim);
         }
@@ -272,10 +277,10 @@
             </div>
             <div class="source-list" id="source-list">
                 {% for s in sources %}
-                <div class="source-item" id="src-{{ s.id }}">
+                <div class="source-item" id="src-{{ s.id }}" onclick="previewSource('{{ s.id }}')" style="cursor:pointer;">
                     <span class="status {{ 'status-loaded' if s.loaded else 'status-pending' }}"></span>
                     <span class="name" title="{{ s.filename }}">{{ s.filename }}</span>
-                    <button class="del-btn" onclick="deleteSource('{{ s.id }}')" title="Delete">✕</button>
+                    <button class="del-btn" onclick="event.stopPropagation();deleteSource('{{ s.id }}')" title="Delete">✕</button>
                 </div>
                 {% endfor %}
             </div>
@@ -292,6 +297,12 @@
                 <label class="toggle">
                     <input type="checkbox" id="enable-search"> Web Search
                 </label>
+                <label class="toggle" style="margin-left:8px;">
+                    Temp: <input type="range" id="temperature" min="0" max="2" step="0.1" value="0.7"
+                        style="width:80px;vertical-align:middle;" oninput="document.getElementById('temp-val').textContent=this.value">
+                    <span id="temp-val" style="font-size:11px;min-width:24px;display:inline-block;">0.7</span>
+                </label>
+                <button class="btn btn-outline" style="width:auto;padding:4px 10px;margin-left:auto;" onclick="openSettingsModal()">Settings</button>
             </div>
             <div class="chat-messages" id="chat-messages">
                 <div class="msg msg-system">Add sources and click "Load Sources" to get started</div>
@@ -332,7 +343,7 @@
             <h3>Add Sources</h3>
             <form id="upload-form" onsubmit="uploadSources(event)">
                 <input type="file" id="upload-files" multiple accept=".txt,.md,.py,.rs,.ts,.js,.json,.csv,.html,.xml,.yaml,.yml,.toml,.pdf">
-                <input type="text" id="upload-urls" placeholder="Enter URLs (one per line, YouTube supported)">
+                <textarea id="upload-urls" placeholder="Enter URLs (one per line, YouTube supported)" rows="3"></textarea>
                 <textarea id="upload-paste" placeholder="Paste text directly..."></textarea>
                 <div class="btn-row">
                     <button type="button" class="btn btn-outline" onclick="closeUploadModal()">Cancel</button>
@@ -342,28 +353,105 @@
         </div>
     </div>
 
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal">
+            <h3>Chat Settings</h3>
+            <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:4px;">System Prompt</label>
+            <textarea id="system-prompt" rows="6" placeholder="You are an expert research assistant..."></textarea>
+            <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:4px;">Temperature: <span id="settings-temp-val">0.7</span></label>
+            <input type="range" id="settings-temperature" min="0" max="2" step="0.1" value="0.7"
+                style="width:100%;margin-bottom:12px;"
+                oninput="document.getElementById('settings-temp-val').textContent=this.value">
+            <div class="btn-row">
+                <button class="btn btn-outline" onclick="closeSettingsModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="applySettings()">Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Source Preview Modal -->
+    <div class="modal-overlay" id="preview-modal">
+        <div class="modal" style="width:640px;max-height:80vh;display:flex;flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <h3 id="preview-title" style="margin:0;">Source Preview</h3>
+                <button class="btn btn-outline" style="width:auto;padding:4px 10px;" onclick="closePreviewModal()">Close</button>
+            </div>
+            <div id="preview-meta" style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;"></div>
+            <div id="preview-content" style="flex:1;overflow-y:auto;white-space:pre-wrap;font-size:13px;
+                background:var(--bg-input);padding:12px;border-radius:var(--radius);max-height:60vh;word-break:break-word;"></div>
+        </div>
+    </div>
+
     <script>
     const NB_ID = '{{ notebook.id }}';
     let currentChatlogId = null;
     let isStreaming = false;
 
     // ── Upload Modal ──
+    // ── Modals ──
     function openUploadModal() { document.getElementById('upload-modal').classList.add('show'); }
     function closeUploadModal() { document.getElementById('upload-modal').classList.remove('show'); }
+    function openSettingsModal() {
+        document.getElementById('settings-temperature').value = document.getElementById('temperature').value;
+        document.getElementById('settings-temp-val').textContent = document.getElementById('temperature').value;
+        document.getElementById('settings-modal').classList.add('show');
+    }
+    function closeSettingsModal() { document.getElementById('settings-modal').classList.remove('show'); }
+    function applySettings() {
+        const temp = document.getElementById('settings-temperature').value;
+        document.getElementById('temperature').value = temp;
+        document.getElementById('temp-val').textContent = temp;
+        closeSettingsModal();
+    }
+    function openPreviewModal() { document.getElementById('preview-modal').classList.add('show'); }
+    function closePreviewModal() { document.getElementById('preview-modal').classList.remove('show'); }
+
+    async function previewSource(id) {
+        openPreviewModal();
+        document.getElementById('preview-title').textContent = 'Loading...';
+        document.getElementById('preview-meta').textContent = '';
+        document.getElementById('preview-content').textContent = '';
+        try {
+            const r = await fetch('/api/sources/' + id);
+            const data = await r.json();
+            document.getElementById('preview-title').textContent = data.filename || 'Source';
+            const meta = [`Type: ${data.source_type}`, `Tokens: ~${data.token_estimate}`, `Loaded: ${data.loaded ? 'Yes' : 'No'}`];
+            if (data.summary) meta.push(`Summary: ${data.summary}`);
+            document.getElementById('preview-meta').textContent = meta.join(' | ');
+            const text = data.raw_text || '(no content)';
+            document.getElementById('preview-content').textContent = text.slice(0, 50000);
+        } catch (e) {
+            document.getElementById('preview-title').textContent = 'Error';
+            document.getElementById('preview-content').textContent = e.message;
+        }
+    }
 
     async function uploadSources(e) {
         e.preventDefault();
-        const form = new FormData();
-        form.append('notebook_id', NB_ID);
-        const files = document.getElementById('upload-files').files;
-        for (const f of files) form.append('files', f);
-        form.append('urls', document.getElementById('upload-urls').value);
-        form.append('paste_text', document.getElementById('upload-paste').value);
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+        submitBtn.textContent = 'Adding...';
+        submitBtn.disabled = true;
+        submitBtn.classList.add('loading');
+        try {
+            const form = new FormData();
+            form.append('notebook_id', NB_ID);
+            const files = document.getElementById('upload-files').files;
+            for (const f of files) form.append('files', f);
+            form.append('urls', document.getElementById('upload-urls').value);
+            form.append('paste_text', document.getElementById('upload-paste').value);
 
-        const r = await fetch('/api/sources/upload', { method: 'POST', body: form });
-        const data = await r.json();
-        closeUploadModal();
-        location.reload();
+            const r = await fetch('/api/sources/upload', { method: 'POST', body: form });
+            const data = await r.json();
+            const count = (data.added || []).length;
+            submitBtn.textContent = `Added ${count} source(s)`;
+            setTimeout(() => { closeUploadModal(); location.reload(); }, 800);
+        } catch (err) {
+            submitBtn.textContent = 'Add';
+            submitBtn.disabled = false;
+            submitBtn.classList.remove('loading');
+            alert('Upload error: ' + err.message);
+        }
     }
 
     // ── Sources ──
@@ -509,6 +597,8 @@
                     message: message,
                     chatlog_id: currentChatlogId,
                     enable_search: document.getElementById('enable-search').checked,
+                    system_prompt: document.getElementById('system-prompt').value,
+                    temperature: parseFloat(document.getElementById('temperature').value),
                 }),
             });
 
@@ -528,7 +618,15 @@
                     if (!line.startsWith('data: ')) continue;
                     try {
                         const data = JSON.parse(line.slice(6));
-                        if (data.type === 'thinking') {
+                        if (data.type === 'tool_status') {
+                            if (!assistantDiv.querySelector('.tool-status')) {
+                                const ts = document.createElement('div');
+                                ts.className = 'tool-status';
+                                assistantDiv.insertBefore(ts, assistantDiv.firstChild);
+                            }
+                            assistantDiv.querySelector('.tool-status').textContent += data.content;
+                            container.scrollTop = container.scrollHeight;
+                        } else if (data.type === 'thinking') {
                             if (!assistantDiv.querySelector('.thinking')) {
                                 const details = document.createElement('details');
                                 details.className = 'thinking';
