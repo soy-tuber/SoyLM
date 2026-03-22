@@ -113,14 +113,26 @@
         }
         .chat-toolbar .toggle input { accent-color: var(--accent); }
         .chat-messages {
-            flex: 1; overflow-y: auto; padding: 20px; display: flex;
-            flex-direction: column; gap: 16px;
+            flex: 1; overflow-y: auto; padding: 10px 14px; display: flex;
+            flex-direction: column; gap: 8px;
         }
         .msg {
-            max-width: 85%; padding: 12px 16px; border-radius: var(--radius-lg);
-            font-size: 14px; line-height: 1.65; white-space: pre-wrap;
+            max-width: 90%; padding: 8px 12px; border-radius: var(--radius);
+            font-size: 13px; line-height: 1.45;
             word-break: break-word;
         }
+        .msg h1, .msg h2, .msg h3, .msg h4 {
+            margin: 6px 0 3px; font-size: 13px; line-height: 1.3;
+        }
+        .msg h1 { font-size: 15px; }
+        .msg h2 { font-size: 14px; }
+        .msg p { margin: 2px 0; }
+        .msg ul, .msg ol { margin: 2px 0; padding-left: 18px; }
+        .msg li { margin: 1px 0; }
+        .msg hr { margin: 6px 0; border-color: var(--border); }
+        .msg table { font-size: 12px; border-collapse: collapse; margin: 4px 0; }
+        .msg th, .msg td { padding: 3px 8px; border: 1px solid var(--border); }
+        .msg code { font-size: 12px; }
         .msg-user {
             align-self: flex-end; background: var(--accent-dim); color: var(--text-primary);
             border-bottom-right-radius: 4px;
@@ -145,6 +157,15 @@
         .thinking pre {
             margin: 4px 0 0; white-space: pre-wrap; font-size: 11px;
             max-height: 200px; overflow-y: auto; color: var(--text-dim);
+        }
+        .source-extract-panel {
+            margin: 4px 0; padding: 12px 14px;
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+        .source-extract-panel label:hover {
+            background: var(--bg-tertiary, rgba(255,255,255,0.03));
+            border-radius: 4px;
         }
         .search-results {
             margin-top: 8px; padding: 8px 12px; background: var(--bg-secondary);
@@ -550,6 +571,10 @@
         return div;
     }
 
+    let pendingMessage = '';
+    let pendingSourceIds = [];
+    let pendingExtractId = '';
+
     async function sendMessage() {
         if (isStreaming) return;
         const input = document.getElementById('chat-input');
@@ -562,9 +587,83 @@
 
         input.value = '';
         appendMessage('user', message);
+        pendingMessage = message;
 
-        const assistantDiv = appendMessage('assistant', '');
         const container = document.getElementById('chat-messages');
+
+        // Step 1-3: Extract keywords and search sources
+        const extractDiv = document.createElement('div');
+        extractDiv.className = 'msg assistant';
+        extractDiv.innerHTML = '<span style="color:#888">Extracting sources...</span>';
+        container.appendChild(extractDiv);
+        container.scrollTop = container.scrollHeight;
+
+        try {
+            const enableSearch = document.getElementById('enable-search').checked;
+            const resp = await fetch('/api/sources/extract', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ notebook_id: NB_ID, message: message, enable_search: enableSearch }),
+            });
+            const data = await resp.json();
+            pendingExtractId = data.extract_id || '';
+            const hasSources = data.sources && data.sources.length > 0;
+            const hasWeb = data.web_results && data.web_results.length > 0;
+
+            if (hasSources || hasWeb) {
+                let html = `<div class="source-extract-panel">`;
+                html += `<div style="margin-bottom:8px;color:#888;font-size:0.85em">Keywords: <code>${data.keywords}</code></div>`;
+                if (hasSources) {
+                    html += `<div style="margin-bottom:8px;font-weight:600">Local Sources (${data.sources.length})</div>`;
+                    data.sources.forEach((s) => {
+                        html += `<label style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px;font-size:0.9em;cursor:pointer">`;
+                        html += `<input type="checkbox" checked data-source-id="${s.id}" class="source-check" style="margin-top:3px">`;
+                        html += `<span><strong>${s.filename}</strong><br><span style="color:#999;font-size:0.85em">${s.summary.substring(0,120)}... (~${s.token_estimate} tokens)</span></span>`;
+                        html += `</label>`;
+                    });
+                }
+                if (hasWeb) {
+                    html += `<div style="margin:12px 0 8px;font-weight:600;color:var(--accent)">Web Results (${data.web_results.length})</div>`;
+                    data.web_results.forEach((w) => {
+                        html += `<label style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px;font-size:0.9em;cursor:pointer">`;
+                        html += `<input type="checkbox" checked data-web-url="${w.url}" class="web-check" style="margin-top:3px">`;
+                        html += `<span><strong>${w.title}</strong><br><span style="color:#999;font-size:0.85em">${w.snippet.substring(0,150)}</span><br><a href="${w.url}" target="_blank" style="font-size:0.8em;color:var(--accent)">${w.url.substring(0,80)}</a></span>`;
+                        html += `</label>`;
+                    });
+                }
+                html += `<button class="btn" onclick="executeWithSources()" style="margin-top:10px;padding:6px 20px">Execute</button>`;
+                html += `</div>`;
+                extractDiv.innerHTML = html;
+            } else {
+                extractDiv.innerHTML = '<span style="color:#888">No matching sources found. Proceeding without RAG context...</span>';
+                pendingSourceIds = [];
+                await executeStream();
+            }
+        } catch (e) {
+            extractDiv.innerHTML = `<span style="color:#c00">Source extraction failed: ${e.message}. Proceeding...</span>`;
+            pendingSourceIds = [];
+            await executeStream();
+        }
+        container.scrollTop = container.scrollHeight;
+    }
+
+    let pendingWebUrls = [];
+
+    function executeWithSources() {
+        pendingSourceIds = [];
+        document.querySelectorAll('.source-check').forEach(cb => {
+            if (cb.checked) pendingSourceIds.push(cb.dataset.sourceId);
+        });
+        pendingWebUrls = [];
+        document.querySelectorAll('.web-check').forEach(cb => {
+            if (cb.checked) pendingWebUrls.push(cb.dataset.webUrl);
+        });
+        executeStream();
+    }
+
+    async function executeStream() {
+        const container = document.getElementById('chat-messages');
+        const assistantDiv = appendMessage('assistant', '');
         container.scrollTop = container.scrollHeight;
         let streamedText = '';
 
@@ -577,11 +676,14 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     notebook_id: NB_ID,
-                    message: message,
+                    message: pendingMessage,
                     chatlog_id: currentChatlogId,
                     enable_search: document.getElementById('enable-search').checked,
                     system_prompt: document.getElementById('system-prompt').value,
                     temperature: parseFloat(document.getElementById('temperature').value),
+                    source_ids: pendingSourceIds,
+                    web_urls: pendingWebUrls,
+                    extract_id: pendingExtractId,
                 }),
             });
 

@@ -34,7 +34,7 @@ NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-Nano-9B-v2-
 # 9B @ FP16 on 5090: ~80-120 tok/s output → 4096 tokens ≈ 35-50s worst case.
 # With thinking enabled, thinking tokens count toward max_tokens.
 # Streaming max: 4096 (thinking + answer). Agent loop: 2048 (tool decisions only).
-STREAM_MAX_TOKENS = int(os.getenv("STREAM_MAX_TOKENS", "4096"))
+STREAM_MAX_TOKENS = int(os.getenv("STREAM_MAX_TOKENS", "8192"))
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "2048"))
 
 DDG_BASE = "https://api.duckduckgo.com/"
@@ -651,6 +651,23 @@ def _format_source(filename: str, flash_analysis: str, summary: str = "") -> str
     return "\n".join(parts)
 
 
+def _build_context_from_ids(source_ids: list[str]) -> str:
+    """Build RAG context from explicitly selected source IDs."""
+    if not source_ids:
+        return ""
+    db = get_db()
+    placeholders = ",".join("?" for _ in source_ids)
+    rows = db.execute(f"""
+        SELECT filename, flash_analysis, summary
+        FROM sources WHERE id IN ({placeholders}) AND loaded = 1
+    """, source_ids).fetchall()
+    db.close()
+    parts = []
+    for r in rows:
+        parts.append(_format_source(r["filename"], r["flash_analysis"] or "", r["summary"] or ""))
+    return "\n\n---\n\n".join(parts)
+
+
 async def build_rag_context(notebook_id: str, query: str) -> str:
     """Build context string for LLM prompt via FTS5 search."""
     results = await search_sources(notebook_id, query, limit=5)
@@ -886,9 +903,6 @@ async def load_all_sources(notebook_id: str, request: Request):
     loaded_count = sum(1 for r in results if not isinstance(r, Exception))
     errors = [str(r) for r in results if isinstance(r, Exception)]
 
-    # Warm up vLLM prefix cache with full context (fire-and-forget)
-    asyncio.create_task(warmup_prefix_cache(notebook_id))
-
     return JSONResponse({
         "loaded": loaded_count,
         "backfilled": backfilled,
@@ -935,8 +949,33 @@ async def chat_stream(request: Request):
     # Clamp temperature
     temperature = max(0.0, min(2.0, float(temperature)))
 
-    # Build RAG context
-    rag_context = await build_rag_context(notebook_id, message) if notebook_id else ""
+    # Build RAG context (use selected source_ids if provided, else full search)
+    source_ids = body.get("source_ids", [])
+    web_urls = body.get("web_urls", [])
+    if source_ids:
+        rag_context = _build_context_from_ids(source_ids)
+    elif notebook_id:
+        rag_context = await build_rag_context(notebook_id, message)
+    else:
+        rag_context = ""
+
+    # Build web context from cached extract or fetch fresh
+    extract_id = body.get("extract_id", "")
+    web_context = ""
+    if web_urls:
+        cached = _extract_cache.get(extract_id, {}).get("web_contents", {})
+        parts = []
+        for url in web_urls[:5]:
+            if url in cached and cached[url]:
+                parts.append(f"[Web: {url}]\n{cached[url]}")
+        # Fetch any URLs not in cache
+        missing = [u for u in web_urls[:5] if u not in cached or not cached.get(u)]
+        if missing:
+            fetched = await asyncio.gather(*[_fetch_web_content(u) for u in missing])
+            for f in fetched:
+                if f["content"]:
+                    parts.append(f"[Web: {f['url']}]\n{f['content']}")
+        web_context = "\n\n---\n\n".join(parts)
 
     # System prompt
     system = custom_system if custom_system else DEFAULT_SYSTEM_PROMPT
@@ -945,6 +984,8 @@ async def chat_stream(request: Request):
     prompt_parts = []
     if rag_context:
         prompt_parts.append(f"【ソースデータ】\n{rag_context}")
+    if web_context:
+        prompt_parts.append(f"【Web検索結果】\n{web_context}")
     prompt_parts.append(f"\n【質問】\n{message}")
     full_prompt = "\n\n".join(prompt_parts)
 
@@ -1089,6 +1130,101 @@ async def delete_chatlog(chatlog_id: str):
     db.commit()
     db.close()
     return JSONResponse({"ok": True})
+
+
+# ─── Source extraction (step 3) ──────────────────────────────────
+# Cache fetched web content so Execute doesn't re-fetch
+_extract_cache: dict[str, dict] = {}  # extract_id -> {source_ids, web_contents}
+
+async def _fetch_web_content(url: str) -> dict:
+    """Fetch web page text content for RAG context."""
+    import re
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, follow_redirects=True)
+            text = re.sub(r'<[^>]+>', ' ', r.text[:5000])
+            text = re.sub(r'\s+', ' ', text).strip()[:2000]
+            return {"url": url, "content": text}
+    except Exception:
+        return {"url": url, "content": ""}
+
+
+@app.post("/api/sources/extract")
+async def extract_sources(request: Request):
+    """Extract matching sources for a query (step 3 pause point).
+    Fetches web content, warms prefix cache, returns results for user review."""
+    body = await request.json()
+    notebook_id = body.get("notebook_id", "")
+    message = body.get("message", "")
+    enable_search = body.get("enable_search", False)
+    if not notebook_id or not message:
+        return JSONResponse({"sources": [], "keywords": "", "web_results": [], "extract_id": ""})
+
+    keywords = await _extract_search_keywords(message)
+
+    # Run FTS5 search and optionally DDG search in parallel
+    search_coro = search_sources(notebook_id, message, limit=5)
+    if enable_search:
+        fts_results, web_results = await asyncio.gather(
+            search_coro, ddg_search(keywords, max_results=3)
+        )
+    else:
+        fts_results = await search_coro
+        web_results = []
+
+    sources_out = []
+    for r in fts_results:
+        sources_out.append({
+            "id": r["id"],
+            "filename": r["filename"],
+            "summary": r.get("summary", ""),
+            "token_estimate": r.get("token_estimate", 0),
+            "rank": r.get("rank", 0),
+        })
+
+    # Fetch web content in parallel (pre-load for Execute)
+    web_contents = {}
+    if web_results:
+        fetched = await asyncio.gather(*[_fetch_web_content(w["url"]) for w in web_results])
+        web_contents = {f["url"]: f["content"] for f in fetched if f["content"]}
+
+    # Cache for Execute step
+    extract_id = uid()
+    source_ids = [s["id"] for s in sources_out]
+    _extract_cache[extract_id] = {
+        "source_ids": source_ids,
+        "web_contents": web_contents,
+    }
+    # Evict old cache entries (keep last 20)
+    if len(_extract_cache) > 20:
+        oldest = list(_extract_cache.keys())[:-20]
+        for k in oldest:
+            del _extract_cache[k]
+
+    # Warm prefix cache with full context (fire-and-forget)
+    async def _warmup():
+        ctx_parts = []
+        local_ctx = _build_context_from_ids(source_ids)
+        if local_ctx:
+            ctx_parts.append(f"【ソースデータ】\n{local_ctx}")
+        if web_contents:
+            web_parts = [f"[Web: {url}]\n{text}" for url, text in web_contents.items()]
+            ctx_parts.append(f"【Web検索結果】\n" + "\n\n---\n\n".join(web_parts))
+        if not ctx_parts:
+            return
+        prefix = "\n\n".join(ctx_parts) + "\n\n【質問】\nReady."
+        try:
+            await nemotron_generate(prompt=prefix, system=DEFAULT_SYSTEM_PROMPT, max_tokens=1)
+        except Exception as e:
+            print(f"Prefix cache warmup failed: {e}")
+    asyncio.create_task(_warmup())
+
+    return JSONResponse({
+        "sources": sources_out,
+        "keywords": keywords,
+        "web_results": web_results,
+        "extract_id": extract_id,
+    })
 
 
 # ─── DDG search API endpoint ─────────────────────────────────────
