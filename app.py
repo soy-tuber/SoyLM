@@ -49,7 +49,13 @@ Rules:
 - If the sources lack relevant information, say so honestly.
 - If the query is ambiguous, ask the user to clarify before answering.
 - Respond in the same language the user wrote their question in.
-- When web search is available, use the ddg_search tool to find current information if the sources don't cover it."""
+
+Available tools (use when appropriate):
+- ddg_search: Search the web for current information not in the sources.
+- calculator: Evaluate math expressions (e.g. percentages, unit conversions, comparisons).
+- datetime_info: Get today's date, calculate deadlines, or count days between dates.
+- stock_info: Get current stock price, market cap, and recent news by ticker symbol.
+Use tools proactively when the question involves calculations, dates, stock data, or facts not in the sources."""
 
 # ─── Tool Definitions (OpenAI function calling format) ────────
 TOOL_DDG_SEARCH = {
@@ -75,7 +81,61 @@ TOOL_DDG_SEARCH = {
     }
 }
 
-AVAILABLE_TOOLS = [TOOL_DDG_SEARCH]
+TOOL_CALCULATOR = {
+    "type": "function",
+    "function": {
+        "name": "calculator",
+        "description": "Evaluate a math expression. Use for calculations, unit conversions, percentages, etc.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Math expression to evaluate (e.g. '1234 * 5.6', '100 / 3', '2**10')"
+                }
+            },
+            "required": ["expression"]
+        }
+    }
+}
+
+TOOL_DATETIME = {
+    "type": "function",
+    "function": {
+        "name": "datetime_info",
+        "description": "Get current date/time or calculate date differences. Use for deadlines, durations, or 'how many days until/since' questions.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to calculate: 'now', 'days_between YYYY-MM-DD YYYY-MM-DD', or 'add_days YYYY-MM-DD N'"
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+TOOL_STOCK = {
+    "type": "function",
+    "function": {
+        "name": "stock_info",
+        "description": "Get stock price, market cap, and recent news for a company. Use when asked about stock performance, valuation, or financial news.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol (e.g. 'NVDA', 'TSLA', '7203.T' for Toyota)"
+                }
+            },
+            "required": ["ticker"]
+        }
+    }
+}
+
+AVAILABLE_TOOLS = [TOOL_DDG_SEARCH, TOOL_CALCULATOR, TOOL_DATETIME, TOOL_STOCK]
 
 app = FastAPI(title="SoyLM")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -263,6 +323,59 @@ async def execute_tool_call(name: str, arguments: dict) -> str:
         if not results:
             return json.dumps({"results": [], "message": "No results found"}, ensure_ascii=False)
         return json.dumps({"results": results}, ensure_ascii=False)
+    elif name == "calculator":
+        expr = arguments.get("expression", "")
+        try:
+            # Safe eval: only allow math operations
+            allowed = set("0123456789+-*/.() %e")
+            if not all(c in allowed for c in expr.replace("**", "").replace("//", "")):
+                return json.dumps({"error": "Invalid expression"})
+            result = eval(expr)  # noqa: S307
+            return json.dumps({"expression": expr, "result": result})
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+    elif name == "datetime_info":
+        from datetime import datetime as dt, timedelta
+        query = arguments.get("query", "now")
+        parts = query.strip().split()
+        try:
+            if parts[0] == "now":
+                return json.dumps({"now": dt.now().strftime("%Y-%m-%d %H:%M:%S %A")})
+            elif parts[0] == "days_between" and len(parts) >= 3:
+                d1 = dt.strptime(parts[1], "%Y-%m-%d")
+                d2 = dt.strptime(parts[2], "%Y-%m-%d")
+                return json.dumps({"from": parts[1], "to": parts[2], "days": (d2 - d1).days})
+            elif parts[0] == "add_days" and len(parts) >= 3:
+                d = dt.strptime(parts[1], "%Y-%m-%d")
+                result = d + timedelta(days=int(parts[2]))
+                return json.dumps({"from": parts[1], "days": int(parts[2]), "result": result.strftime("%Y-%m-%d %A")})
+            else:
+                return json.dumps({"now": dt.now().strftime("%Y-%m-%d %H:%M:%S %A")})
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+    elif name == "stock_info":
+        ticker = arguments.get("ticker", "")
+        try:
+            import yfinance as yf
+            loop = asyncio.get_event_loop()
+            def _fetch():
+                t = yf.Ticker(ticker)
+                info = t.info
+                news = t.news[:3] if t.news else []
+                return {
+                    "ticker": ticker,
+                    "name": info.get("shortName", ""),
+                    "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                    "currency": info.get("currency", ""),
+                    "market_cap": info.get("marketCap"),
+                    "52w_high": info.get("fiftyTwoWeekHigh"),
+                    "52w_low": info.get("fiftyTwoWeekLow"),
+                    "news": [{"title": n.get("title", ""), "link": n.get("link", "")} for n in news],
+                }
+            result = await loop.run_in_executor(None, _fetch)
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": f"Stock lookup failed: {e}"})
     return json.dumps({"error": f"Unknown tool: {name}"})
 
 
