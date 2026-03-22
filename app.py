@@ -31,6 +31,32 @@ NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-Nano-9B-v2-
 
 DDG_BASE = "https://api.duckduckgo.com/"
 
+# ─── Tool Definitions (OpenAI function calling format) ────────
+TOOL_DDG_SEARCH = {
+    "type": "function",
+    "function": {
+        "name": "ddg_search",
+        "description": "Search the web using DuckDuckGo. Use this when you need current information, facts, or data not available in the provided sources.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query string"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Number of results to return (default: 5, max: 10)",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+AVAILABLE_TOOLS = [TOOL_DDG_SEARCH]
+
 app = FastAPI(title="SoyLM")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -127,13 +153,18 @@ def content_hash(text: str) -> str:
 
 # ─── Nemotron (vLLM OpenAI compat) ───────────────────────────────
 async def nemotron_generate(prompt: str, system: str = "",
-                            max_tokens: int = 8192) -> str:
-    """Non-streaming Nemotron call (for loading, no thinking)."""
+                            max_tokens: int = 8192,
+                            tools: list[dict] | None = None,
+                            messages_override: list[dict] | None = None) -> dict:
+    """Non-streaming Nemotron call. Returns full message dict (content + tool_calls)."""
     url = f"{NEMOTRON_BASE}/chat/completions"
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    if messages_override:
+        messages = messages_override
+    else:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
     body = {
         "model": NEMOTRON_MODEL,
         "messages": messages,
@@ -142,22 +173,36 @@ async def nemotron_generate(prompt: str, system: str = "",
         "stream": False,
         "chat_template_kwargs": {"enable_thinking": False},
     }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(url, json=body)
         r.raise_for_status()
         data = r.json()
-        return data["choices"][0]["message"]["content"]
+        return data["choices"][0]["message"]
+
+
+async def nemotron_generate_text(prompt: str, system: str = "",
+                                  max_tokens: int = 8192) -> str:
+    """Non-streaming Nemotron call (text only, backward compat)."""
+    msg = await nemotron_generate(prompt, system=system, max_tokens=max_tokens)
+    return msg.get("content", "")
 
 
 async def nemotron_stream(prompt: str, system: str = "",
                           max_tokens: int = 16384,
-                          enable_thinking: bool = True) -> AsyncGenerator[str, None]:
+                          enable_thinking: bool = True,
+                          messages_override: list[dict] | None = None) -> AsyncGenerator[str, None]:
     """Streaming via vLLM OpenAI-compatible endpoint with thinking support."""
     url = f"{NEMOTRON_BASE}/chat/completions"
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    if messages_override:
+        messages = messages_override
+    else:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
     body = {
         "model": NEMOTRON_MODEL,
         "messages": messages,
@@ -185,6 +230,52 @@ async def nemotron_stream(prompt: str, system: str = "",
                             yield {"type": "text", "content": content}
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
+
+
+# ─── Tool Execution ──────────────────────────────────────────────
+async def execute_tool_call(name: str, arguments: dict) -> str:
+    """Execute a tool call and return the result as a string."""
+    if name == "ddg_search":
+        query = arguments.get("query", "")
+        max_results = min(arguments.get("max_results", 5), 10)
+        results = await ddg_search(query, max_results=max_results)
+        if not results:
+            return json.dumps({"results": [], "message": "No results found"}, ensure_ascii=False)
+        return json.dumps({"results": results}, ensure_ascii=False)
+    return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+async def nemotron_agent_loop(messages: list[dict], tools: list[dict],
+                              max_rounds: int = 3) -> list[dict]:
+    """Run agent loop: call Nemotron with tools, execute tool calls, repeat.
+    Returns the updated messages list with all tool interactions appended."""
+    for _ in range(max_rounds):
+        response = await nemotron_generate(
+            prompt="", messages_override=messages, tools=tools, max_tokens=4096
+        )
+        tool_calls = response.get("tool_calls")
+        if not tool_calls:
+            # No tool calls - agent is done planning, ready for final answer
+            break
+
+        # Append assistant message with tool_calls
+        messages.append(response)
+
+        # Execute each tool call and append results
+        for tc in tool_calls:
+            fn = tc["function"]
+            try:
+                args = json.loads(fn["arguments"]) if isinstance(fn["arguments"], str) else fn["arguments"]
+            except json.JSONDecodeError:
+                args = {}
+            result = await execute_tool_call(fn["name"], args)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": result,
+            })
+
+    return messages
 
 
 # ─── DDG Search ───────────────────────────────────────────────────
@@ -421,7 +512,7 @@ async def flash_load_source(source_id: str, raw_text: str, filename: str):
 JSONのみ出力。"""
 
     try:
-        raw = await nemotron_generate(prompt, max_tokens=2048)
+        raw = await nemotron_generate_text(prompt, max_tokens=2048)
         raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -467,7 +558,7 @@ Example: Nissan, EV, electric vehicle, patent, 日産, 電気自動車, 特許
 Question: {query}
 Keywords:"""
     try:
-        raw = await nemotron_generate(prompt, max_tokens=128)
+        raw = await nemotron_generate_text(prompt, max_tokens=128)
         return raw.strip()
     except Exception:
         return query
@@ -751,7 +842,7 @@ async def delete_source(source_id: str):
 # ─── Routes: Chat SSE ────────────────────────────────────────────
 @app.post("/api/chat/stream")
 async def chat_stream(request: Request):
-    """SSE streaming chat endpoint."""
+    """SSE streaming chat endpoint with optional tool-calling agent loop."""
     body = await request.json()
     notebook_id = body.get("notebook_id", "")
     message = body.get("message", "")
@@ -761,28 +852,16 @@ async def chat_stream(request: Request):
     # Build RAG context
     rag_context = await build_rag_context(notebook_id, message) if notebook_id else ""
 
-    # Optional DDG search
-    search_data = []
-    if enable_search:
-        search_data = await ddg_search(message, max_results=5)
-
-    search_text = ""
-    if search_data:
-        search_text = "\n【Web検索結果】\n" + "\n".join(
-            f"- {r['title']}: {r['snippet']}" for r in search_data
-        )
-
     # System prompt
     system = """You are an expert research assistant.
 Answer accurately based on the provided source data.
-If information is not in the sources, clearly state it is speculation."""
+If information is not in the sources, clearly state it is speculation.
+When web search is available, use the ddg_search tool to find current information if the sources don't contain what you need."""
 
     # Build user prompt
     prompt_parts = []
     if rag_context:
         prompt_parts.append(f"【ソースデータ】\n{rag_context}")
-    if search_text:
-        prompt_parts.append(search_text)
     prompt_parts.append(f"\n【質問】\n{message}")
     full_prompt = "\n\n".join(prompt_parts)
 
@@ -791,18 +870,47 @@ If information is not in the sources, clearly state it is speculation."""
         db = get_db()
         db.execute(
             "INSERT INTO messages (id, chatlog_id, role, content, search_results) VALUES (?, ?, ?, ?, ?)",
-            (uid(), chatlog_id, "user", message,
-             json.dumps(search_data, ensure_ascii=False) if search_data else None)
+            (uid(), chatlog_id, "user", message, None)
         )
         db.commit()
         db.close()
 
-    # Stream response
+    # Agent loop: let Nemotron decide when to search
+    agent_messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": full_prompt},
+    ]
+    tools_for_agent = AVAILABLE_TOOLS if enable_search else None
+    search_data = []  # collect search results for source display
+
+    if enable_search:
+        # Run agent loop (non-streaming) to resolve tool calls
+        agent_messages = await nemotron_agent_loop(
+            agent_messages, tools=AVAILABLE_TOOLS, max_rounds=3
+        )
+        # Extract search results from tool messages for source display
+        for msg in agent_messages:
+            if msg.get("role") == "tool":
+                try:
+                    tool_result = json.loads(msg["content"])
+                    search_data.extend(tool_result.get("results", []))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+    # Stream final response
     async def event_stream() -> AsyncGenerator[str, None]:
         full_response = []
         full_thinking = []
         try:
-            gen = nemotron_stream(full_prompt, system=system)
+            # Emit tool usage info to frontend
+            if search_data:
+                tool_info = f"🔍 Searched: {len(search_data)} results found\n"
+                yield f"data: {json.dumps({'type': 'tool_status', 'content': tool_info}, ensure_ascii=False)}\n\n"
+
+            gen = nemotron_stream(
+                prompt="", system="",
+                messages_override=agent_messages,
+            )
 
             async for chunk in gen:
                 if chunk["type"] == "thinking":
@@ -817,8 +925,9 @@ If information is not in the sources, clearly state it is speculation."""
                 response_text = "".join(full_response)
                 db = get_db()
                 db.execute(
-                    "INSERT INTO messages (id, chatlog_id, role, content, model) VALUES (?, ?, ?, ?, ?)",
-                    (uid(), chatlog_id, "assistant", response_text, "nemotron")
+                    "INSERT INTO messages (id, chatlog_id, role, content, model, search_results) VALUES (?, ?, ?, ?, ?, ?)",
+                    (uid(), chatlog_id, "assistant", response_text, "nemotron",
+                     json.dumps(search_data, ensure_ascii=False) if search_data else None)
                 )
                 db.execute("UPDATE chatlogs SET updated_at = datetime('now') WHERE id = ?", (chatlog_id,))
                 db.commit()
