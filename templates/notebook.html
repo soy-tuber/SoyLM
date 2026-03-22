@@ -297,11 +297,7 @@
                 <label class="toggle">
                     <input type="checkbox" id="enable-search"> Web Search
                 </label>
-                <label class="toggle" style="margin-left:8px;">
-                    Temp: <input type="range" id="temperature" min="0" max="2" step="0.1" value="0.7"
-                        style="width:80px;vertical-align:middle;" oninput="document.getElementById('temp-val').textContent=this.value">
-                    <span id="temp-val" style="font-size:11px;min-width:24px;display:inline-block;">0.7</span>
-                </label>
+                <input type="hidden" id="temperature" value="0.1">
                 <button class="btn btn-outline" style="width:auto;padding:4px 10px;margin-left:auto;" onclick="openSettingsModal()">Settings</button>
             </div>
             <div class="chat-messages" id="chat-messages">
@@ -359,10 +355,6 @@
             <h3>Chat Settings</h3>
             <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:4px;">System Prompt</label>
             <textarea id="system-prompt" rows="6" placeholder="You are an expert research assistant..."></textarea>
-            <label style="display:block;font-size:13px;color:var(--text-secondary);margin-bottom:4px;">Temperature: <span id="settings-temp-val">0.7</span></label>
-            <input type="range" id="settings-temperature" min="0" max="2" step="0.1" value="0.7"
-                style="width:100%;margin-bottom:12px;"
-                oninput="document.getElementById('settings-temp-val').textContent=this.value">
             <div class="btn-row">
                 <button class="btn btn-outline" onclick="closeSettingsModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="applySettings()">Apply</button>
@@ -392,18 +384,9 @@
     // ── Modals ──
     function openUploadModal() { document.getElementById('upload-modal').classList.add('show'); }
     function closeUploadModal() { document.getElementById('upload-modal').classList.remove('show'); }
-    function openSettingsModal() {
-        document.getElementById('settings-temperature').value = document.getElementById('temperature').value;
-        document.getElementById('settings-temp-val').textContent = document.getElementById('temperature').value;
-        document.getElementById('settings-modal').classList.add('show');
-    }
+    function openSettingsModal() { document.getElementById('settings-modal').classList.add('show'); }
     function closeSettingsModal() { document.getElementById('settings-modal').classList.remove('show'); }
-    function applySettings() {
-        const temp = document.getElementById('settings-temperature').value;
-        document.getElementById('temperature').value = temp;
-        document.getElementById('temp-val').textContent = temp;
-        closeSettingsModal();
-    }
+    function applySettings() { closeSettingsModal(); }
     function openPreviewModal() { document.getElementById('preview-modal').classList.add('show'); }
     function closePreviewModal() { document.getElementById('preview-modal').classList.remove('show'); }
 

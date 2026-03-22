@@ -194,7 +194,7 @@ async def nemotron_stream(prompt: str, system: str = "",
                           max_tokens: int = 16384,
                           enable_thinking: bool = True,
                           messages_override: list[dict] | None = None,
-                          temperature: float = 0.7) -> AsyncGenerator[str, None]:
+                          temperature: float = 0.1) -> AsyncGenerator[str, None]:
     """Streaming via vLLM OpenAI-compatible endpoint with thinking support."""
     url = f"{NEMOTRON_BASE}/chat/completions"
     if messages_override:
@@ -880,7 +880,7 @@ async def chat_stream(request: Request):
     chatlog_id = body.get("chatlog_id", "")
     enable_search = body.get("enable_search", False)
     custom_system = body.get("system_prompt", "").strip()
-    temperature = body.get("temperature", 0.7)
+    temperature = body.get("temperature", 0.1)
 
     # Clamp temperature
     temperature = max(0.0, min(2.0, float(temperature)))
