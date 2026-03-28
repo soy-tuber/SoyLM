@@ -349,6 +349,16 @@
     <div class="modal-overlay" id="upload-modal">
         <div class="modal">
             <h3>Add Sources</h3>
+            <!-- DDG Search -->
+            <div style="margin-bottom:12px;">
+                <div style="display:flex;gap:6px;">
+                    <input type="text" id="ddg-query" placeholder="Search the web (DuckDuckGo)..." style="flex:1;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text-primary);"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault();searchDDG()}">
+                    <button type="button" class="btn btn-outline" style="width:auto;padding:6px 14px;" onclick="searchDDG()">Search</button>
+                </div>
+                <div id="ddg-results" style="max-height:180px;overflow-y:auto;margin-top:6px;font-size:13px;"></div>
+            </div>
+            <hr style="border:none;border-top:1px solid var(--border-light);margin-bottom:12px;">
             <form id="upload-form" onsubmit="uploadSources(event)">
                 <input type="file" id="upload-files" multiple accept=".txt,.md,.py,.rs,.ts,.js,.json,.csv,.html,.xml,.yaml,.yml,.toml,.pdf">
                 <textarea id="upload-urls" placeholder="Enter URLs (one per line, YouTube supported)" rows="3"></textarea>
@@ -468,6 +478,49 @@
             submitBtn.classList.remove('loading');
             alert('Upload error: ' + err.message);
         }
+    }
+
+    // ── DDG Search ──
+    async function searchDDG() {
+        const query = document.getElementById('ddg-query').value.trim();
+        if (!query) return;
+        const container = document.getElementById('ddg-results');
+        container.innerHTML = '<span style="color:var(--text-dim)">Searching...</span>';
+        try {
+            const r = await fetch('/api/search/ddg', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query }),
+            });
+            const data = await r.json();
+            if (!data.results || data.results.length === 0) {
+                container.innerHTML = '<span style="color:var(--text-dim)">No results</span>';
+                return;
+            }
+            container.innerHTML = data.results.map(r => `
+                <div style="padding:6px 8px;border-radius:var(--radius);cursor:pointer;transition:background 0.1s;"
+                     onmouseover="this.style.background='var(--bg-tertiary)'" onmouseout="this.style.background=''"
+                     onclick="addDDGUrl('${r.url.replace(/'/g, "\\'")}')">
+                    <div style="font-weight:500;color:var(--accent);font-size:13px;">${r.title}</div>
+                    <div style="color:var(--text-dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.url}</div>
+                    <div style="color:var(--text-secondary);font-size:12px;margin-top:2px;">${r.snippet}</div>
+                </div>
+            `).join('');
+        } catch (e) {
+            container.innerHTML = `<span style="color:var(--danger)">${e.message}</span>`;
+        }
+    }
+
+    function addDDGUrl(url) {
+        const textarea = document.getElementById('upload-urls');
+        const existing = textarea.value.trim();
+        if (existing.includes(url)) return;
+        textarea.value = existing ? existing + '\n' + url : url;
+        // Visual feedback
+        const el = event.currentTarget;
+        el.style.background = 'var(--accent-light)';
+        el.style.opacity = '0.6';
+        el.style.pointerEvents = 'none';
     }
 
     // ── Sources ──

@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.cors import CORSMiddleware
 
-from search import fetch_url_text
+from search import ddg_search, fetch_url_text
 
 # ─── Config ───────────────────────────────────────────────────────
 DATA_DIR = Path("data")
@@ -763,6 +763,18 @@ async def delete_chatlog(chatlog_id: str):
     db.commit()
     db.close()
     return JSONResponse({"ok": True})
+
+
+# ─── DDG web search (for source discovery) ──────────────────────
+@app.post("/api/search/ddg")
+async def search_ddg(request: Request):
+    """Search DuckDuckGo. Returns titles, URLs, snippets."""
+    body = await request.json()
+    query = body.get("query", "").strip()
+    if not query:
+        return JSONResponse({"results": []})
+    results = await ddg_search(query, max_results=body.get("max_results", 5))
+    return JSONResponse({"results": results})
 
 
 # ─── vLLM status ─────────────────────────────────────────────────
