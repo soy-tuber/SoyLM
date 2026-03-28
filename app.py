@@ -16,9 +16,10 @@ from typing import AsyncGenerator
 import httpx
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.cors import CORSMiddleware
+
+from search import fetch_url_text
 
 # ─── Config ───────────────────────────────────────────────────────
 DATA_DIR = Path("data")
@@ -26,18 +27,10 @@ DATA_DIR.mkdir(exist_ok=True)
 SOURCES_DIR = DATA_DIR / "sources"
 SOURCES_DIR.mkdir(exist_ok=True)
 
+# Gateway on 8000 manages vLLM lifecycle (auto-start, idle stop)
 NEMOTRON_BASE = os.getenv("NEMOTRON_BASE", "http://localhost:8000/v1")
 NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese")
-
-# Token budgets — RTX 5090 32GB, 9B model
-# Input context: generous (sources + history). Output: capped for ~10s response.
-# 9B @ FP16 on 5090: ~80-120 tok/s output → 4096 tokens ≈ 35-50s worst case.
-# With thinking enabled, thinking tokens count toward max_tokens.
-# Streaming max: 4096 (thinking + answer). Agent loop: 2048 (tool decisions only).
 STREAM_MAX_TOKENS = int(os.getenv("STREAM_MAX_TOKENS", "8192"))
-AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "2048"))
-
-DDG_BASE = "https://api.duckduckgo.com/"
 
 # System prompt — accuracy-focused, grounding rules
 DEFAULT_SYSTEM_PROMPT = """You are a research assistant grounded in the user's sources.
@@ -48,94 +41,8 @@ Rules:
 - If the answer requires information NOT in the sources, explicitly state: "This is not in the provided sources" before answering from general knowledge.
 - If the sources lack relevant information, say so honestly.
 - If the query is ambiguous, ask the user to clarify before answering.
-- Respond in the same language the user wrote their question in.
+- Respond in the same language the user wrote their question in."""
 
-Available tools (use when appropriate):
-- ddg_search: Search the web for current information not in the sources.
-- calculator: Evaluate math expressions (e.g. percentages, unit conversions, comparisons).
-- datetime_info: Get today's date, calculate deadlines, or count days between dates.
-- stock_info: Get current stock price, market cap, and recent news by ticker symbol.
-Use tools proactively when the question involves calculations, dates, stock data, or facts not in the sources."""
-
-# ─── Tool Definitions (OpenAI function calling format) ────────
-TOOL_DDG_SEARCH = {
-    "type": "function",
-    "function": {
-        "name": "ddg_search",
-        "description": "Search the web using DuckDuckGo. Use this when you need current information, facts, or data not available in the provided sources.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query string"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Number of results to return (default: 5, max: 10)",
-                    "default": 5
-                }
-            },
-            "required": ["query"]
-        }
-    }
-}
-
-TOOL_CALCULATOR = {
-    "type": "function",
-    "function": {
-        "name": "calculator",
-        "description": "Evaluate a math expression. Use for calculations, unit conversions, percentages, etc.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expression": {
-                    "type": "string",
-                    "description": "Math expression to evaluate (e.g. '1234 * 5.6', '100 / 3', '2**10')"
-                }
-            },
-            "required": ["expression"]
-        }
-    }
-}
-
-TOOL_DATETIME = {
-    "type": "function",
-    "function": {
-        "name": "datetime_info",
-        "description": "Get current date/time or calculate date differences. Use for deadlines, durations, or 'how many days until/since' questions.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "What to calculate: 'now', 'days_between YYYY-MM-DD YYYY-MM-DD', or 'add_days YYYY-MM-DD N'"
-                }
-            },
-            "required": ["query"]
-        }
-    }
-}
-
-TOOL_STOCK = {
-    "type": "function",
-    "function": {
-        "name": "stock_info",
-        "description": "Get stock price, market cap, and recent news for a company. Use when asked about stock performance, valuation, or financial news.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "ticker": {
-                    "type": "string",
-                    "description": "Stock ticker symbol (e.g. 'NVDA', 'TSLA', '7203.T' for Toyota)"
-                }
-            },
-            "required": ["ticker"]
-        }
-    }
-}
-
-AVAILABLE_TOOLS = [TOOL_DDG_SEARCH, TOOL_CALCULATOR, TOOL_DATETIME, TOOL_STOCK]
 
 app = FastAPI(title="SoyLM")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -207,8 +114,6 @@ def init_db():
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             model TEXT,
-            search_results TEXT,
-            fact_check TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
     """)
@@ -234,9 +139,9 @@ def content_hash(text: str) -> str:
 # ─── Nemotron (vLLM OpenAI compat) ───────────────────────────────
 async def nemotron_generate(prompt: str, system: str = "",
                             max_tokens: int = 8192,
-                            tools: list[dict] | None = None,
+                            enable_thinking: bool = True,
                             messages_override: list[dict] | None = None) -> dict:
-    """Non-streaming Nemotron call. Returns full message dict (content + tool_calls)."""
+    """Non-streaming Nemotron call. Returns full message dict."""
     url = f"{NEMOTRON_BASE}/chat/completions"
     if messages_override:
         messages = messages_override
@@ -251,11 +156,8 @@ async def nemotron_generate(prompt: str, system: str = "",
         "max_tokens": max_tokens,
         "temperature": 0.3,
         "stream": False,
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
-    if tools:
-        body["tools"] = tools
-        body["tool_choice"] = "auto"
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(url, json=body)
         r.raise_for_status()
@@ -265,8 +167,9 @@ async def nemotron_generate(prompt: str, system: str = "",
 
 async def nemotron_generate_text(prompt: str, system: str = "",
                                   max_tokens: int = 8192) -> str:
-    """Non-streaming Nemotron call (text only, backward compat)."""
-    msg = await nemotron_generate(prompt, system=system, max_tokens=max_tokens)
+    """Non-streaming Nemotron call (text only). Thinking disabled for utility calls."""
+    msg = await nemotron_generate(prompt, system=system, max_tokens=max_tokens,
+                                   enable_thinking=False)
     return msg.get("content", "")
 
 
@@ -274,8 +177,9 @@ async def nemotron_stream(prompt: str, system: str = "",
                           max_tokens: int = 16384,
                           enable_thinking: bool = True,
                           messages_override: list[dict] | None = None,
-                          temperature: float = 0.1) -> AsyncGenerator[str, None]:
-    """Streaming via vLLM OpenAI-compatible endpoint with thinking support."""
+                          temperature: float = 0.1) -> AsyncGenerator[dict, None]:
+    """Streaming via vLLM OpenAI-compatible endpoint with thinking support.
+    Yields dicts: {"type": "thinking"|"text", "content": str}"""
     url = f"{NEMOTRON_BASE}/chat/completions"
     if messages_override:
         messages = messages_override
@@ -300,7 +204,6 @@ async def nemotron_stream(prompt: str, system: str = "",
                     try:
                         chunk = json.loads(line[6:])
                         delta = chunk["choices"][0]["delta"]
-                        # reasoning_content: separated by vLLM reasoning parser
                         reasoning = delta.get("reasoning_content", "")
                         content = delta.get("content", "")
                         if reasoning:
@@ -313,316 +216,15 @@ async def nemotron_stream(prompt: str, system: str = "",
                         continue
 
 
-# ─── Tool Execution ──────────────────────────────────────────────
-async def execute_tool_call(name: str, arguments: dict) -> str:
-    """Execute a tool call and return the result as a string."""
-    if name == "ddg_search":
-        query = arguments.get("query", "")
-        max_results = min(arguments.get("max_results", 5), 10)
-        results = await ddg_search(query, max_results=max_results)
-        if not results:
-            return json.dumps({"results": [], "message": "No results found"}, ensure_ascii=False)
-        return json.dumps({"results": results}, ensure_ascii=False)
-    elif name == "calculator":
-        expr = arguments.get("expression", "")
-        try:
-            # Safe eval: only allow math operations
-            allowed = set("0123456789+-*/.() %e")
-            if not all(c in allowed for c in expr.replace("**", "").replace("//", "")):
-                return json.dumps({"error": "Invalid expression"})
-            result = eval(expr)  # noqa: S307
-            return json.dumps({"expression": expr, "result": result})
-        except Exception as e:
-            return json.dumps({"error": str(e)})
-    elif name == "datetime_info":
-        from datetime import datetime as dt, timedelta
-        query = arguments.get("query", "now")
-        parts = query.strip().split()
-        try:
-            if parts[0] == "now":
-                return json.dumps({"now": dt.now().strftime("%Y-%m-%d %H:%M:%S %A")})
-            elif parts[0] == "days_between" and len(parts) >= 3:
-                d1 = dt.strptime(parts[1], "%Y-%m-%d")
-                d2 = dt.strptime(parts[2], "%Y-%m-%d")
-                return json.dumps({"from": parts[1], "to": parts[2], "days": (d2 - d1).days})
-            elif parts[0] == "add_days" and len(parts) >= 3:
-                d = dt.strptime(parts[1], "%Y-%m-%d")
-                result = d + timedelta(days=int(parts[2]))
-                return json.dumps({"from": parts[1], "days": int(parts[2]), "result": result.strftime("%Y-%m-%d %A")})
-            else:
-                return json.dumps({"now": dt.now().strftime("%Y-%m-%d %H:%M:%S %A")})
-        except Exception as e:
-            return json.dumps({"error": str(e)})
-    elif name == "stock_info":
-        ticker = arguments.get("ticker", "")
-        try:
-            import yfinance as yf
-            loop = asyncio.get_event_loop()
-            def _fetch():
-                t = yf.Ticker(ticker)
-                info = t.info
-                news = t.news[:3] if t.news else []
-                return {
-                    "ticker": ticker,
-                    "name": info.get("shortName", ""),
-                    "price": info.get("currentPrice") or info.get("regularMarketPrice"),
-                    "currency": info.get("currency", ""),
-                    "market_cap": info.get("marketCap"),
-                    "52w_high": info.get("fiftyTwoWeekHigh"),
-                    "52w_low": info.get("fiftyTwoWeekLow"),
-                    "news": [{"title": n.get("title", ""), "link": n.get("link", "")} for n in news],
-                }
-            result = await loop.run_in_executor(None, _fetch)
-            return json.dumps(result, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"error": f"Stock lookup failed: {e}"})
-    return json.dumps({"error": f"Unknown tool: {name}"})
-
-
-async def nemotron_agent_loop(messages: list[dict], tools: list[dict],
-                              max_rounds: int = 3) -> list[dict]:
-    """Run agent loop: call Nemotron with tools, execute tool calls, repeat.
-    Returns the updated messages list with all tool interactions appended."""
-    for _ in range(max_rounds):
-        response = await nemotron_generate(
-            prompt="", messages_override=messages, tools=tools, max_tokens=AGENT_MAX_TOKENS
-        )
-        tool_calls = response.get("tool_calls")
-        if not tool_calls:
-            # No tool calls - agent is done planning, ready for final answer
-            break
-
-        # Append assistant message with tool_calls
-        messages.append(response)
-
-        # Execute each tool call and append results
-        for tc in tool_calls:
-            fn = tc["function"]
-            try:
-                args = json.loads(fn["arguments"]) if isinstance(fn["arguments"], str) else fn["arguments"]
-            except json.JSONDecodeError:
-                args = {}
-            result = await execute_tool_call(fn["name"], args)
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": result,
-            })
-
-    return messages
-
-
-# ─── DDG Search ───────────────────────────────────────────────────
-async def ddg_search(query: str, max_results: int = 5) -> list[dict]:
-    """DuckDuckGo search via ddgs library (proven in StockAnalyzer)."""
-    from ddgs import DDGS
-    results = []
-    try:
-        loop = asyncio.get_event_loop()
-        def _search():
-            ddgs = DDGS()
-            return ddgs.text(query, region="wt-wt", safesearch="off", max_results=max_results)
-        raw = await loop.run_in_executor(None, _search)
-        for r in raw:
-            results.append({
-                "title": r.get("title", ""),
-                "url": r.get("href", ""),
-                "snippet": r.get("body", "")[:300],
-            })
-    except Exception as e:
-        print(f"DDG search error: {e}")
-    return results[:max_results]
-
-
-# ─── URL / YouTube fetch ─────────────────────────────────────────
-def _extract_video_id(url: str) -> str | None:
-    """Extract YouTube video ID from various URL formats."""
-    import re
-    patterns = [
-        r'(?:v=|/v/|youtu\.be/)([a-zA-Z0-9_-]{11})',
-        r'(?:embed/)([a-zA-Z0-9_-]{11})',
-    ]
-    for p in patterns:
-        m = re.search(p, url)
-        if m:
-            return m.group(1)
-    return None
-
-
-async def _fetch_youtube_transcript(video_id: str) -> str:
-    """Fetch YouTube transcript via youtube-transcript-api v1.2+."""
-    from youtube_transcript_api import YouTubeTranscriptApi
-
-    loop = asyncio.get_event_loop()
-    def _get():
-        api = YouTubeTranscriptApi()
-        try:
-            result = api.fetch(video_id, languages=['ja', 'en'])
-            return [s.text for s in result.snippets]
-        except Exception:
-            # Fallback: grab whatever language is available
-            try:
-                tlist = api.list(video_id)
-                for t in tlist:
-                    result = api.fetch(video_id, languages=[t.language_code])
-                    return [s.text for s in result.snippets]
-            except Exception:
-                return []
-    segments = await loop.run_in_executor(None, _get)
-    if not segments:
-        return ""
-    return "\n".join(segments)
-
-
-async def fetch_url_text(url: str) -> str:
-    """Fetch text content from URL. Handles YouTube with transcript extraction."""
-    if "youtube.com" in url or "youtu.be" in url:
-        # Get video metadata via oEmbed
-        meta_text = ""
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                "https://www.youtube.com/oembed",
-                params={"url": url, "format": "json"}
-            )
-            if r.status_code == 200:
-                data = r.json()
-                meta_text = f"[YouTube] {data.get('title', 'Unknown')}\nAuthor: {data.get('author_name', '')}\nURL: {url}"
-            else:
-                meta_text = f"[YouTube] {url}"
-
-        # Try to get transcript
-        video_id = _extract_video_id(url)
-        if video_id:
-            try:
-                transcript = await _fetch_youtube_transcript(video_id)
-                if transcript:
-                    meta_text += f"\n\n--- Transcript ---\n{transcript[:100000]}"
-            except Exception as e:
-                meta_text += f"\n\n(字幕取得失敗: {e})"
-
-        return meta_text
-    else:
-        return await _fetch_url_with_depth(url, max_depth=1)
-
-
-async def _html_to_text(html: str) -> str:
-    """Strip HTML tags and return plain text."""
-    import re
-    text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
-    text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
-    text = re.sub(r'<[^>]+>', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-
-async def _fetch_with_playwright(url: str) -> str:
-    """Fetch page content using headless Chromium (for JS-rendered sites)."""
-    from playwright.async_api import async_playwright
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-            # Wait a bit for dynamic content
-            await page.wait_for_timeout(2000)
-            html = await page.content()
-            await browser.close()
-            return html
-    except Exception as e:
-        print(f"Playwright fetch error: {e}")
-        return ""
-
-
-def _extract_same_domain_links(html: str, base_url: str, max_links: int = 15) -> list[str]:
-    """Extract same-domain links from HTML, prioritizing content pages."""
-    import re
-    from urllib.parse import urljoin, urlparse
-    base_domain = urlparse(base_url).netloc
-    base_path = urlparse(base_url).path.rstrip('/')
-    raw_links = re.findall(r'<a[^>]+href=["\']([^"\'#]+)["\']', html)
-    seen = set()
-    content_links = []  # likely article/content pages
-    nav_links = []      # navigation/utility pages
-
-    skip_ext = ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.css', '.js',
-                '.pdf', '.zip', '.mp4', '.mp3', '.woff', '.woff2', '.ico')
-    # Short paths are usually nav (e.g. /en/, /catalog), longer are content
-    skip_paths = ('/feed', '/rss', '/sitemap', '/tag/', '/category/', '/author/')
-
-    for href in raw_links:
-        full = urljoin(base_url, href)
-        parsed = urlparse(full)
-        if parsed.netloc != base_domain:
-            continue
-        if any(parsed.path.lower().endswith(e) for e in skip_ext):
-            continue
-        clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
-        if clean in seen or clean.rstrip('/') == base_url.rstrip('/'):
-            continue
-        if any(s in parsed.path.lower() for s in skip_paths):
-            continue
-        seen.add(clean)
-        # Heuristic: paths with hyphens and length > 2 segments are likely articles
-        path_parts = [p for p in parsed.path.split('/') if p]
-        has_slug = any('-' in p and len(p) > 5 for p in path_parts)
-        if has_slug or len(path_parts) >= 2:
-            content_links.append(clean)
-        else:
-            nav_links.append(clean)
-
-    # Prioritize content pages over navigation
-    result = content_links + nav_links
-    return result[:max_links]
-
-
-async def _fetch_url_with_depth(url: str, max_depth: int = 2) -> str:
-    """Fetch URL text with crawl depth (same-domain links only)."""
-    visited = set()
-    all_texts = []
-    total_chars = 0
-    max_total = 100000  # cap total at 100k chars
-
-    async def _crawl(target_url: str, depth: int):
-        nonlocal total_chars
-        if target_url in visited or depth > max_depth or total_chars >= max_total:
-            return
-        visited.add(target_url)
-
-        try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                r = await client.get(target_url, headers={"User-Agent": "Mozilla/5.0"})
-                r.raise_for_status()
-                html = r.text
-        except Exception:
-            return
-
-        text = await _html_to_text(html)
-
-        # Fallback to Playwright if static fetch got too little content (JS-rendered site)
-        if len(text) < 500:
-            pw_html = await _fetch_with_playwright(target_url)
-            if pw_html:
-                pw_text = await _html_to_text(pw_html)
-                if len(pw_text) > len(text):
-                    text = pw_text
-                    html = pw_html  # use JS-rendered HTML for link extraction too
-
-        if not text:
-            return
-
-        # Cap per page
-        text = text[:30000]
-        all_texts.append(f"[URL: {target_url}]\n{text}")
-        total_chars += len(text)
-
-        # Crawl deeper if allowed
-        if depth < max_depth and total_chars < max_total:
-            child_links = _extract_same_domain_links(html, target_url, max_links=5)
-            tasks = [_crawl(link, depth + 1) for link in child_links]
-            await asyncio.gather(*tasks)
-
-    await _crawl(url, depth=1)
-    return "\n\n---\n\n".join(all_texts)[:max_total]
+# ─── PDF Extraction ───────────────────────────────────────────
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract text from PDF using pymupdf."""
+    import pymupdf
+    text_parts = []
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for page in doc:
+            text_parts.append(page.get_text())
+    return "\n\n".join(text_parts)
 
 
 # ─── Flash Source Loader ──────────────────────────────────────────
@@ -662,7 +264,6 @@ JSONのみ出力。"""
             "language": "unknown",
         }
 
-    # Store analysis + full text together
     analysis["full_text"] = raw_text[:100000]
     db = get_db()
     db.execute("""
@@ -684,15 +285,16 @@ JSONのみ出力。"""
 
 # ─── RAG Search ───────────────────────────────────────────────────
 async def _extract_search_keywords(query: str) -> str:
-    """Use Nemotron to extract bilingual (EN+JA) search keywords from user query."""
-    prompt = f"""Extract search keywords from the following question.
-Output English keywords AND Japanese keywords, comma-separated, nothing else.
-Example: Nissan, EV, electric vehicle, patent, 日産, 電気自動車, 特許
+    """Translate query to English, extract nouns, return EN+JA keywords."""
+    prompt = f"""Translate to English, then list only the nouns. Output original Japanese nouns and English nouns, comma-separated. Max 8 words. Nothing else.
 
-Question: {query}
-Keywords:"""
+Q: Chromebookのセットアップ方法
+A: Chromebook, setup, セットアップ
+
+Q: {query}
+A:"""
     try:
-        raw = await nemotron_generate_text(prompt, max_tokens=128)
+        raw = await nemotron_generate_text(prompt, max_tokens=64)
         return raw.strip()
     except Exception:
         return query
@@ -713,7 +315,7 @@ def _keywords_to_fts5(keywords: str) -> str:
 
 
 async def search_sources(notebook_id: str, query: str, limit: int = 10) -> list[dict]:
-    """FTS5 search: extract bilingual keywords via LLM, then search."""
+    """FTS5 search: translate to EN, extract nouns, search with BM25."""
     keywords = await _extract_search_keywords(query)
     db = get_db()
     fts_query = _keywords_to_fts5(keywords)
@@ -781,44 +383,13 @@ def _build_context_from_ids(source_ids: list[str]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-async def build_rag_context(notebook_id: str, query: str) -> str:
-    """Build context string for LLM prompt via FTS5 search."""
-    results = await search_sources(notebook_id, query, limit=5)
-    if not results:
-        sources = get_all_loaded_sources(notebook_id)
-        parts = [f"[{s['filename']}] {s.get('summary', '')}" for s in sources]
-        return "\n".join(parts)
-    parts = []
-    for r in results:
-        parts.append(_format_source(r['filename'], r.get('flash_analysis', ''), r.get('summary', '')))
-    return "\n\n---\n\n".join(parts)
-
-
 def _build_full_context(notebook_id: str) -> str:
     """Build full source context string for a notebook (all loaded sources)."""
     sources = get_all_loaded_sources(notebook_id)
     parts = []
-    for i, s in enumerate(sources, 1):
+    for s in sources:
         parts.append(_format_source(s['filename'], s.get('flash_analysis', ''), s.get('summary', '')))
     return "\n\n---\n\n".join(parts)
-
-
-async def warmup_prefix_cache(notebook_id: str):
-    """Send a minimal request to vLLM to populate the KV prefix cache.
-    The system prompt + full source context becomes a cached prefix.
-    Subsequent chat requests sharing this prefix skip re-computation."""
-    context = _build_full_context(notebook_id)
-    if not context:
-        return
-    prefix_prompt = f"【ソースデータ】\n{context}\n\n【質問】\nReady."
-    try:
-        await nemotron_generate(
-            prompt=prefix_prompt,
-            system=DEFAULT_SYSTEM_PROMPT,
-            max_tokens=1,  # minimal generation, just warm the cache
-        )
-    except Exception as e:
-        print(f"Prefix cache warmup failed (non-critical): {e}")
 
 
 # ─── Routes: Pages ────────────────────────────────────────────────
@@ -855,7 +426,7 @@ async def notebook_page(request: Request, notebook_id: str):
 
 # ─── Routes: Notebooks CRUD ──────────────────────────────────────
 @app.post("/api/notebooks")
-async def create_notebook(name: str = Form("新規ノートブック")):
+async def create_notebook(name: str = Form("New Notebook")):
     nid = uid()
     db = get_db()
     db.execute("INSERT INTO notebooks (id, name) VALUES (?, ?)", (nid, name))
@@ -873,17 +444,6 @@ async def delete_notebook(notebook_id: str):
     return JSONResponse({"ok": True})
 
 
-# ─── PDF Extraction ───────────────────────────────────────────
-def _extract_pdf_text(pdf_bytes: bytes) -> str:
-    """Extract text from PDF using pymupdf."""
-    import pymupdf
-    text_parts = []
-    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
-        for page in doc:
-            text_parts.append(page.get_text())
-    return "\n\n".join(text_parts)
-
-
 # ─── Routes: Sources ─────────────────────────────────────────────
 @app.post("/api/sources/upload")
 async def upload_source(
@@ -896,19 +456,16 @@ async def upload_source(
     db = get_db()
     added = []
 
-    # File uploads
     if files:
         for f in files:
             if not f.filename:
                 continue
             file_bytes = await f.read()
-            # PDF: extract text with pymupdf
             if f.filename.lower().endswith(".pdf"):
                 raw = _extract_pdf_text(file_bytes)
             else:
                 raw = file_bytes.decode("utf-8", errors="replace")
             chash = content_hash(raw)
-            # Dedup
             exists = db.execute(
                 "SELECT id FROM sources WHERE notebook_id = ? AND content_hash = ?",
                 (notebook_id, chash)
@@ -922,7 +479,6 @@ async def upload_source(
             """, (sid, notebook_id, f.filename, "file", raw, chash, estimate_tokens(raw)))
             added.append({"id": sid, "filename": f.filename, "type": "file"})
 
-    # URLs
     if urls.strip():
         for url in urls.strip().split("\n"):
             url = url.strip()
@@ -947,7 +503,6 @@ async def upload_source(
             except Exception as e:
                 added.append({"id": None, "filename": url[:100], "type": "error", "error": str(e)})
 
-    # Pasted text
     if paste_text.strip():
         raw = paste_text.strip()
         chash = content_hash(raw)
@@ -969,23 +524,20 @@ async def upload_source(
 
 
 @app.post("/api/sources/load/{notebook_id}")
-async def load_all_sources(notebook_id: str, request: Request):
+async def load_all_sources(notebook_id: str):
     """Process sources using Nemotron. Unloaded sources get full analysis.
     Already-loaded sources without full_text get backfilled."""
     db = get_db()
-    # Unloaded: full analysis
     unloaded = db.execute(
         "SELECT id, filename, raw_text FROM sources WHERE notebook_id = ? AND loaded = 0",
         (notebook_id,)
     ).fetchall()
-    # Already loaded but missing full_text in flash_analysis: backfill
     loaded = db.execute(
         "SELECT id, filename, raw_text, flash_analysis FROM sources WHERE notebook_id = ? AND loaded = 1",
         (notebook_id,)
     ).fetchall()
     db.close()
 
-    # Backfill full_text into existing flash_analysis
     backfilled = 0
     for src in loaded:
         fa = src["flash_analysis"] or ""
@@ -1004,14 +556,8 @@ async def load_all_sources(notebook_id: str, request: Request):
             db.close()
             backfilled += 1
 
-    # Process unloaded sources
-    results = []
-    tasks = []
-    for src in unloaded:
-        tasks.append(flash_load_source(src["id"], src["raw_text"], src["filename"]))
-
-    if tasks:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [flash_load_source(src["id"], src["raw_text"], src["filename"]) for src in unloaded]
+    results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
 
     loaded_count = sum(1 for r in results if not isinstance(r, Exception))
     errors = [str(r) for r in results if isinstance(r, Exception)]
@@ -1047,58 +593,62 @@ async def delete_source(source_id: str):
     return JSONResponse({"ok": True})
 
 
+# ─── Source extraction (Extract step) ─────────────────────────────
+@app.post("/api/sources/extract")
+async def extract_sources(request: Request):
+    """Extract matching sources for a query. Returns results for user review before execution."""
+    body = await request.json()
+    notebook_id = body.get("notebook_id", "")
+    message = body.get("message", "")
+    if not notebook_id or not message:
+        return JSONResponse({"sources": [], "keywords": ""})
+
+    keywords = await _extract_search_keywords(message)
+    fts_results = await search_sources(notebook_id, message, limit=5)
+
+    sources_out = []
+    for r in fts_results:
+        sources_out.append({
+            "id": r["id"],
+            "filename": r["filename"],
+            "summary": r.get("summary", ""),
+            "token_estimate": r.get("token_estimate", 0),
+            "rank": r.get("rank", 0),
+        })
+
+    return JSONResponse({
+        "sources": sources_out,
+        "keywords": keywords,
+    })
+
+
 # ─── Routes: Chat SSE ────────────────────────────────────────────
 @app.post("/api/chat/stream")
 async def chat_stream(request: Request):
-    """SSE streaming chat endpoint with optional tool-calling agent loop."""
+    """SSE streaming chat. Thinking is streamed in real-time, content is sent as a complete block."""
     body = await request.json()
     notebook_id = body.get("notebook_id", "")
     message = body.get("message", "")
     chatlog_id = body.get("chatlog_id", "")
-    enable_search = body.get("enable_search", False)
     custom_system = body.get("system_prompt", "").strip()
     temperature = body.get("temperature", 0.1)
-
-    # Clamp temperature
     temperature = max(0.0, min(2.0, float(temperature)))
 
-    # Build RAG context (use selected source_ids if provided, else full search)
+    # Build RAG context
     source_ids = body.get("source_ids", [])
-    web_urls = body.get("web_urls", [])
     if source_ids:
         rag_context = _build_context_from_ids(source_ids)
     elif notebook_id:
-        rag_context = await build_rag_context(notebook_id, message)
+        rag_context = _build_full_context(notebook_id)
     else:
         rag_context = ""
 
-    # Build web context from cached extract or fetch fresh
-    extract_id = body.get("extract_id", "")
-    web_context = ""
-    if web_urls:
-        cached = _extract_cache.get(extract_id, {}).get("web_contents", {})
-        parts = []
-        for url in web_urls[:5]:
-            if url in cached and cached[url]:
-                parts.append(f"[Web: {url}]\n{cached[url]}")
-        # Fetch any URLs not in cache
-        missing = [u for u in web_urls[:5] if u not in cached or not cached.get(u)]
-        if missing:
-            fetched = await asyncio.gather(*[_fetch_web_content(u) for u in missing])
-            for f in fetched:
-                if f["content"]:
-                    parts.append(f"[Web: {f['url']}]\n{f['content']}")
-        web_context = "\n\n---\n\n".join(parts)
-
-    # System prompt
     system = custom_system if custom_system else DEFAULT_SYSTEM_PROMPT
 
     # Build user prompt
     prompt_parts = []
     if rag_context:
         prompt_parts.append(f"【ソースデータ】\n{rag_context}")
-    if web_context:
-        prompt_parts.append(f"【Web検索結果】\n{web_context}")
     prompt_parts.append(f"\n【質問】\n{message}")
     full_prompt = "\n\n".join(prompt_parts)
 
@@ -1106,79 +656,49 @@ async def chat_stream(request: Request):
     if chatlog_id:
         db = get_db()
         db.execute(
-            "INSERT INTO messages (id, chatlog_id, role, content, search_results) VALUES (?, ?, ?, ?, ?)",
-            (uid(), chatlog_id, "user", message, None)
+            "INSERT INTO messages (id, chatlog_id, role, content) VALUES (?, ?, ?, ?)",
+            (uid(), chatlog_id, "user", message)
         )
         db.commit()
         db.close()
 
-    # Agent loop: let Nemotron decide when to search
-    agent_messages = [
+    # Build messages for LLM
+    llm_messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": full_prompt},
     ]
-    tools_for_agent = AVAILABLE_TOOLS if enable_search else None
-    search_data = []  # collect search results for source display
 
-    if enable_search:
-        # Run agent loop (non-streaming) to resolve tool calls
-        agent_messages = await nemotron_agent_loop(
-            agent_messages, tools=AVAILABLE_TOOLS, max_rounds=3
-        )
-        # Extract search results from tool messages for source display
-        for msg in agent_messages:
-            if msg.get("role") == "tool":
-                try:
-                    tool_result = json.loads(msg["content"])
-                    search_data.extend(tool_result.get("results", []))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-    # Stream final response
+    # Stream thinking in real-time, collect content, send as single block at end
     async def event_stream() -> AsyncGenerator[str, None]:
         full_response = []
-        full_thinking = []
-        try:
-            # Emit tool usage info to frontend
-            if search_data:
-                tool_info = f"🔍 Searched: {len(search_data)} results found\n"
-                yield f"data: {json.dumps({'type': 'tool_status', 'content': tool_info}, ensure_ascii=False)}\n\n"
 
-            gen = nemotron_stream(
+        try:
+            async for chunk in nemotron_stream(
                 prompt="", system="",
-                messages_override=agent_messages,
+                messages_override=llm_messages,
                 temperature=temperature,
                 max_tokens=STREAM_MAX_TOKENS,
-            )
-
-            async for chunk in gen:
+            ):
                 if chunk["type"] == "thinking":
-                    full_thinking.append(chunk["content"])
                     yield f"data: {json.dumps({'type': 'thinking', 'content': chunk['content']}, ensure_ascii=False)}\n\n"
                 else:
                     full_response.append(chunk["content"])
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk['content']}, ensure_ascii=False)}\n\n"
+
+            # Send complete content as single block
+            response_text = "".join(full_response)
+            if response_text:
+                yield f"data: {json.dumps({'type': 'content', 'content': response_text}, ensure_ascii=False)}\n\n"
 
             # Save assistant message
             if chatlog_id:
-                response_text = "".join(full_response)
                 db = get_db()
                 db.execute(
-                    "INSERT INTO messages (id, chatlog_id, role, content, model, search_results) VALUES (?, ?, ?, ?, ?, ?)",
-                    (uid(), chatlog_id, "assistant", response_text, "nemotron",
-                     json.dumps(search_data, ensure_ascii=False) if search_data else None)
+                    "INSERT INTO messages (id, chatlog_id, role, content, model) VALUES (?, ?, ?, ?, ?)",
+                    (uid(), chatlog_id, "assistant", response_text, "nemotron")
                 )
                 db.execute("UPDATE chatlogs SET updated_at = datetime('now') WHERE id = ?", (chatlog_id,))
                 db.commit()
                 db.close()
-
-            # Append web search sources section
-            if search_data:
-                sources_md = "\n\n---\n\n**Web Sources**\n\n"
-                for r in search_data:
-                    sources_md += f"- [{r['title']}]({r['url']})\n  {r['snippet'][:150]}\n\n"
-                full_response.append(sources_md)
-                yield f"data: {json.dumps({'type': 'chunk', 'content': sources_md}, ensure_ascii=False)}\n\n"
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
@@ -1218,7 +738,7 @@ async def download_chatlog(chatlog_id: str):
     db = get_db()
     chatlog = db.execute("SELECT * FROM chatlogs WHERE id = ?", (chatlog_id,)).fetchone()
     msgs = db.execute(
-        "SELECT role, content, model, search_results, fact_check, created_at FROM messages WHERE chatlog_id = ? ORDER BY created_at",
+        "SELECT role, content, model, created_at FROM messages WHERE chatlog_id = ? ORDER BY created_at",
         (chatlog_id,)
     ).fetchall()
     db.close()
@@ -1245,108 +765,35 @@ async def delete_chatlog(chatlog_id: str):
     return JSONResponse({"ok": True})
 
 
-# ─── Source extraction (step 3) ──────────────────────────────────
-# Cache fetched web content so Execute doesn't re-fetch
-_extract_cache: dict[str, dict] = {}  # extract_id -> {source_ids, web_contents}
-
-async def _fetch_web_content(url: str) -> dict:
-    """Fetch web page text content for RAG context."""
-    import re
+# ─── vLLM status ─────────────────────────────────────────────────
+def _get_vllm_pid() -> int | None:
+    """Find PID of the vLLM process listening on port 8100."""
+    import subprocess as sp
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(url, follow_redirects=True)
-            text = re.sub(r'<[^>]+>', ' ', r.text[:5000])
-            text = re.sub(r'\s+', ' ', text).strip()[:2000]
-            return {"url": url, "content": text}
+        out = sp.check_output(["ss", "-tlnp"], text=True, timeout=3)
+        for line in out.splitlines():
+            if ":8100 " in line and "vllm" in line:
+                # Extract pid from users:(("vllm",pid=XXXXX,...))
+                import re
+                m = re.search(r"pid=(\d+)", line)
+                return int(m.group(1)) if m else None
     except Exception:
-        return {"url": url, "content": ""}
+        pass
+    return None
 
 
-@app.post("/api/sources/extract")
-async def extract_sources(request: Request):
-    """Extract matching sources for a query (step 3 pause point).
-    Fetches web content, warms prefix cache, returns results for user review."""
-    body = await request.json()
-    notebook_id = body.get("notebook_id", "")
-    message = body.get("message", "")
-    enable_search = body.get("enable_search", False)
-    if not notebook_id or not message:
-        return JSONResponse({"sources": [], "keywords": "", "web_results": [], "extract_id": ""})
-
-    keywords = await _extract_search_keywords(message)
-
-    # Run FTS5 search and optionally DDG search in parallel
-    search_coro = search_sources(notebook_id, message, limit=5)
-    if enable_search:
-        fts_results, web_results = await asyncio.gather(
-            search_coro, ddg_search(keywords, max_results=3)
-        )
-    else:
-        fts_results = await search_coro
-        web_results = []
-
-    sources_out = []
-    for r in fts_results:
-        sources_out.append({
-            "id": r["id"],
-            "filename": r["filename"],
-            "summary": r.get("summary", ""),
-            "token_estimate": r.get("token_estimate", 0),
-            "rank": r.get("rank", 0),
-        })
-
-    # Fetch web content in parallel (pre-load for Execute)
-    web_contents = {}
-    if web_results:
-        fetched = await asyncio.gather(*[_fetch_web_content(w["url"]) for w in web_results])
-        web_contents = {f["url"]: f["content"] for f in fetched if f["content"]}
-
-    # Cache for Execute step
-    extract_id = uid()
-    source_ids = [s["id"] for s in sources_out]
-    _extract_cache[extract_id] = {
-        "source_ids": source_ids,
-        "web_contents": web_contents,
-    }
-    # Evict old cache entries (keep last 20)
-    if len(_extract_cache) > 20:
-        oldest = list(_extract_cache.keys())[:-20]
-        for k in oldest:
-            del _extract_cache[k]
-
-    # Warm prefix cache with full context (fire-and-forget)
-    async def _warmup():
-        ctx_parts = []
-        local_ctx = _build_context_from_ids(source_ids)
-        if local_ctx:
-            ctx_parts.append(f"【ソースデータ】\n{local_ctx}")
-        if web_contents:
-            web_parts = [f"[Web: {url}]\n{text}" for url, text in web_contents.items()]
-            ctx_parts.append(f"【Web検索結果】\n" + "\n\n---\n\n".join(web_parts))
-        if not ctx_parts:
-            return
-        prefix = "\n\n".join(ctx_parts) + "\n\n【質問】\nReady."
-        try:
-            await nemotron_generate(prompt=prefix, system=DEFAULT_SYSTEM_PROMPT, max_tokens=1)
-        except Exception as e:
-            print(f"Prefix cache warmup failed: {e}")
-    asyncio.create_task(_warmup())
-
-    return JSONResponse({
-        "sources": sources_out,
-        "keywords": keywords,
-        "web_results": web_results,
-        "extract_id": extract_id,
-    })
-
-
-# ─── DDG search API endpoint ─────────────────────────────────────
-@app.get("/api/search")
-async def search_api(q: str = ""):
-    if not q:
-        return JSONResponse([])
-    results = await ddg_search(q)
-    return JSONResponse(results)
+@app.get("/api/vllm/status")
+async def vllm_status():
+    """Check vLLM health and report PID."""
+    pid = _get_vllm_pid()
+    if pid is None:
+        return JSONResponse({"ready": False, "pid": None})
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get("http://localhost:8100/health")
+            return JSONResponse({"ready": r.status_code == 200, "pid": pid})
+    except Exception:
+        return JSONResponse({"ready": False, "pid": pid})
 
 
 # ─── Health ───────────────────────────────────────────────────────

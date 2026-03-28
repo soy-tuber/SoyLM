@@ -6,54 +6,57 @@
     <title>SoyLM</title>
     <style>
         :root {
-            --bg-primary: #1a1a2e;
-            --bg-secondary: #16213e;
-            --bg-card: #1e2a47;
-            --bg-hover: #253559;
-            --text-primary: #e8e8e8;
-            --text-secondary: #8b95a5;
-            --accent: #4fc3f7;
-            --accent-hover: #29b6f6;
-            --border: #2a3a5c;
-            --danger: #ef5350;
-            --success: #66bb6a;
-            --radius: 10px;
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-card: #ffffff;
+            --bg-hover: #f1f3f4;
+            --text-primary: #202124;
+            --text-secondary: #5f6368;
+            --accent: #1a73e8;
+            --accent-hover: #1557b0;
+            --accent-light: #e8f0fe;
+            --border: #dadce0;
+            --danger: #d93025;
+            --success: #1e8e3e;
+            --radius: 8px;
+            --shadow: 0 1px 3px rgba(60,64,67,0.12), 0 1px 2px rgba(60,64,67,0.08);
+            --shadow-hover: 0 4px 8px rgba(60,64,67,0.15), 0 1px 3px rgba(60,64,67,0.12);
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-primary);
+            font-family: 'Google Sans', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-secondary);
             color: var(--text-primary);
             min-height: 100vh;
         }
         .header {
             display: flex; align-items: center; justify-content: space-between;
-            padding: 20px 40px;
+            padding: 16px 32px;
+            background: var(--bg-primary);
             border-bottom: 1px solid var(--border);
         }
         .header h1 {
-            font-size: 24px; font-weight: 700;
-            background: linear-gradient(135deg, var(--accent), #81d4fa);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            font-size: 22px; font-weight: 600;
+            color: var(--text-primary);
         }
-        .header .subtitle { color: var(--text-secondary); font-size: 13px; margin-left: 12px; }
-        .container { max-width: 960px; margin: 40px auto; padding: 0 20px; }
+        .header .subtitle { color: var(--text-secondary); font-size: 13px; margin-left: 10px; }
+        .container { max-width: 960px; margin: 32px auto; padding: 0 20px; }
         .create-bar {
-            display: flex; gap: 10px; margin-bottom: 32px;
+            display: flex; gap: 10px; margin-bottom: 28px;
         }
         .create-bar input {
             flex: 1; padding: 12px 16px;
-            background: var(--bg-secondary); border: 1px solid var(--border);
+            background: var(--bg-primary); border: 1px solid var(--border);
             border-radius: var(--radius); color: var(--text-primary);
             font-size: 14px; outline: none;
         }
         .create-bar input:focus { border-color: var(--accent); }
         .btn {
             padding: 10px 20px; border-radius: var(--radius); border: none;
-            font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+            font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s;
         }
         .btn-primary {
-            background: var(--accent); color: #0a0a1a;
+            background: var(--accent); color: #fff;
         }
         .btn-primary:hover { background: var(--accent-hover); }
         .notebooks-grid {
@@ -64,12 +67,13 @@
             background: var(--bg-card); border: 1px solid var(--border);
             border-radius: var(--radius); padding: 20px;
             cursor: pointer; transition: all 0.15s; position: relative;
+            box-shadow: var(--shadow);
         }
         .notebook-card:hover {
-            border-color: var(--accent); background: var(--bg-hover);
-            transform: translateY(-2px);
+            box-shadow: var(--shadow-hover);
+            transform: translateY(-1px);
         }
-        .notebook-card h3 { font-size: 16px; margin-bottom: 8px; }
+        .notebook-card h3 { font-size: 15px; font-weight: 500; margin-bottom: 8px; }
         .notebook-card .meta { font-size: 12px; color: var(--text-secondary); }
         .notebook-card .delete-btn {
             position: absolute; top: 12px; right: 12px;
@@ -81,14 +85,14 @@
         .empty-state {
             text-align: center; padding: 80px 20px; color: var(--text-secondary);
         }
-        .empty-state h2 { font-size: 20px; margin-bottom: 8px; color: var(--text-primary); }
+        .empty-state h2 { font-size: 18px; margin-bottom: 8px; color: var(--text-primary); font-weight: 500; }
     </style>
 </head>
 <body>
     <div class="header">
         <div style="display:flex;align-items:baseline;">
             <h1>SoyLM</h1>
-            <span class="subtitle">Local-first Research Assistant</span>
+            <span class="subtitle">Local Research Assistant</span>
         </div>
     </div>
     <div class="container">
@@ -101,7 +105,7 @@
         <div class="notebooks-grid">
             {% for nb in notebooks %}
             <div class="notebook-card" onclick="location.href='/notebook/{{ nb.id }}'">
-                <button class="delete-btn" onclick="event.stopPropagation();deleteNotebook('{{ nb.id }}')" title="Delete">✕</button>
+                <button class="delete-btn" onclick="event.stopPropagation();deleteNotebook('{{ nb.id }}')" title="Delete">&times;</button>
                 <h3>{{ nb.name }}</h3>
                 <div class="meta">{{ nb.updated_at }}</div>
             </div>
@@ -110,7 +114,7 @@
         {% else %}
         <div class="empty-state">
             <h2>No notebooks yet</h2>
-            <p>Create one using the form above</p>
+            <p>Create one to get started</p>
         </div>
         {% endif %}
     </div>

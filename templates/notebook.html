@@ -6,74 +6,77 @@
     <title>{{ notebook.name }} — SoyLM</title>
     <style>
         :root {
-            --bg-primary: #1a1a2e;
-            --bg-secondary: #16213e;
-            --bg-card: #1e2a47;
-            --bg-hover: #253559;
-            --bg-input: #131a2e;
-            --text-primary: #e8e8e8;
-            --text-secondary: #8b95a5;
-            --text-dim: #5a6577;
-            --accent: #4fc3f7;
-            --accent-hover: #29b6f6;
-            --accent-dim: rgba(79,195,247,0.15);
-            --border: #2a3a5c;
-            --danger: #ef5350;
-            --success: #66bb6a;
-            --warning: #ffa726;
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-tertiary: #f1f3f4;
+            --bg-input: #ffffff;
+            --text-primary: #202124;
+            --text-secondary: #5f6368;
+            --text-dim: #80868b;
+            --accent: #1a73e8;
+            --accent-hover: #1557b0;
+            --accent-light: #e8f0fe;
+            --border: #dadce0;
+            --border-light: #e8eaed;
+            --danger: #d93025;
+            --success: #1e8e3e;
+            --warning: #f9ab00;
             --radius: 8px;
             --radius-lg: 12px;
+            --shadow: 0 1px 3px rgba(60,64,67,0.12), 0 1px 2px rgba(60,64,67,0.08);
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-primary); color: var(--text-primary);
+            font-family: 'Google Sans', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-secondary); color: var(--text-primary);
             height: 100vh; display: flex; flex-direction: column; overflow: hidden;
         }
 
         /* ── Header ── */
         .header {
             display: flex; align-items: center; justify-content: space-between;
-            padding: 12px 20px; border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
+            padding: 10px 20px; border-bottom: 1px solid var(--border);
+            background: var(--bg-primary); flex-shrink: 0;
         }
         .header-left { display: flex; align-items: center; gap: 12px; }
-        .header .back { color: var(--text-secondary); text-decoration: none; font-size: 18px; }
-        .header .back:hover { color: var(--accent); }
-        .header h1 { font-size: 18px; font-weight: 600; }
+        .header .back {
+            color: var(--text-secondary); text-decoration: none; font-size: 18px;
+            width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+            border-radius: 50%; transition: background 0.1s;
+        }
+        .header .back:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+        .header h1 { font-size: 16px; font-weight: 500; }
         .header .badge {
-            font-size: 11px; padding: 3px 8px; border-radius: 20px;
-            background: var(--accent-dim); color: var(--accent);
+            font-size: 11px; padding: 2px 8px; border-radius: 12px;
+            background: var(--accent-light); color: var(--accent); font-weight: 500;
         }
 
         /* ── 3-Column Layout ── */
         .columns {
-            display: grid; grid-template-columns: 280px 1fr 280px;
+            display: grid; grid-template-columns: 260px 1fr 260px;
             flex: 1; overflow: hidden;
         }
 
         /* ── Left: Sources ── */
         .col-sources {
-            border-right: 1px solid var(--border);
+            border-right: 1px solid var(--border); background: var(--bg-primary);
             display: flex; flex-direction: column; overflow: hidden;
         }
         .col-title {
-            padding: 14px 16px; font-size: 13px; font-weight: 700;
-            text-transform: uppercase; letter-spacing: 0.5px;
-            color: var(--text-secondary); border-bottom: 1px solid var(--border);
+            padding: 14px 16px; font-size: 12px; font-weight: 500;
+            text-transform: uppercase; letter-spacing: 0.8px;
+            color: var(--text-secondary); border-bottom: 1px solid var(--border-light);
             display: flex; align-items: center; justify-content: space-between;
             flex-shrink: 0;
         }
-        .source-list {
-            flex: 1; overflow-y: auto; padding: 8px;
-        }
+        .source-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
         .source-item {
-            padding: 10px 12px; border-radius: var(--radius);
-            margin-bottom: 4px; font-size: 13px; cursor: default;
+            padding: 8px 10px; border-radius: var(--radius);
+            margin-bottom: 2px; font-size: 13px; cursor: pointer;
             display: flex; align-items: center; justify-content: space-between;
             transition: background 0.1s;
         }
-        .source-item:hover { background: var(--bg-hover); }
+        .source-item:hover { background: var(--bg-tertiary); }
         .source-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .source-item .status {
             width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; flex-shrink: 0;
@@ -87,25 +90,21 @@
         .source-item:hover .del-btn { opacity: 1; }
         .source-item .del-btn:hover { color: var(--danger); }
         .source-actions {
-            padding: 12px; border-top: 1px solid var(--border); flex-shrink: 0;
+            padding: 10px 12px; border-top: 1px solid var(--border-light); flex-shrink: 0;
         }
 
         /* ── Center: Chat ── */
         .col-chat {
             display: flex; flex-direction: column; overflow: hidden;
+            background: var(--bg-secondary);
         }
         .chat-toolbar {
-            padding: 10px 16px; border-bottom: 1px solid var(--border);
+            padding: 8px 16px; border-bottom: 1px solid var(--border);
             display: flex; align-items: center; gap: 10px; flex-shrink: 0;
-            flex-wrap: wrap;
+            background: var(--bg-primary);
         }
-        .chat-toolbar select, .chat-toolbar label {
+        .chat-toolbar label {
             font-size: 12px; color: var(--text-secondary);
-        }
-        .chat-toolbar select {
-            background: var(--bg-secondary); border: 1px solid var(--border);
-            color: var(--text-primary); padding: 5px 8px; border-radius: var(--radius);
-            outline: none;
         }
         .chat-toolbar .toggle {
             display: flex; align-items: center; gap: 4px; font-size: 12px;
@@ -113,81 +112,81 @@
         }
         .chat-toolbar .toggle input { accent-color: var(--accent); }
         .chat-messages {
-            flex: 1; overflow-y: auto; padding: 10px 14px; display: flex;
-            flex-direction: column; gap: 8px;
+            flex: 1; overflow-y: auto; padding: 16px 20px; display: flex;
+            flex-direction: column; gap: 12px;
         }
         .msg {
-            max-width: 90%; padding: 8px 12px; border-radius: var(--radius);
-            font-size: 13px; line-height: 1.45;
-            word-break: break-word;
+            max-width: 85%; padding: 12px 16px; border-radius: var(--radius-lg);
+            font-size: 14px; line-height: 1.6; word-break: break-word;
         }
-        .msg h1, .msg h2, .msg h3, .msg h4 {
-            margin: 6px 0 3px; font-size: 13px; line-height: 1.3;
-        }
-        .msg h1 { font-size: 15px; }
-        .msg h2 { font-size: 14px; }
-        .msg p { margin: 2px 0; }
-        .msg ul, .msg ol { margin: 2px 0; padding-left: 18px; }
-        .msg li { margin: 1px 0; }
-        .msg hr { margin: 6px 0; border-color: var(--border); }
-        .msg table { font-size: 12px; border-collapse: collapse; margin: 4px 0; }
-        .msg th, .msg td { padding: 3px 8px; border: 1px solid var(--border); }
-        .msg code { font-size: 12px; }
+        .msg h1, .msg h2, .msg h3, .msg h4 { margin: 8px 0 4px; }
+        .msg h1 { font-size: 16px; }
+        .msg h2 { font-size: 15px; }
+        .msg h3 { font-size: 14px; }
+        .msg p { margin: 4px 0; }
+        .msg ul, .msg ol { margin: 4px 0; padding-left: 20px; }
+        .msg li { margin: 2px 0; }
+        .msg hr { margin: 8px 0; border-color: var(--border-light); }
+        .msg table { font-size: 13px; border-collapse: collapse; margin: 6px 0; }
+        .msg th, .msg td { padding: 4px 10px; border: 1px solid var(--border); }
+        .msg code { font-size: 13px; background: var(--bg-tertiary); padding: 1px 5px; border-radius: 4px; }
+        .msg pre { background: #263238; color: #eeffff; padding: 10px; border-radius: var(--radius); overflow-x: auto; }
+        .msg pre code { background: none; padding: 0; color: inherit; }
+        .msg blockquote { border-left: 3px solid var(--accent); padding-left: 12px; margin: 6px 0; color: var(--text-secondary); }
         .msg-user {
-            align-self: flex-end; background: var(--accent-dim); color: var(--text-primary);
+            align-self: flex-end; background: var(--accent); color: #fff;
             border-bottom-right-radius: 4px;
         }
         .msg-assistant {
-            align-self: flex-start; background: var(--bg-card);
+            align-self: flex-start; background: var(--bg-primary);
+            border: 1px solid var(--border-light);
             border-bottom-left-radius: 4px;
+            box-shadow: var(--shadow);
         }
         .msg-system {
             align-self: center; background: transparent; color: var(--text-dim);
-            font-size: 12px; font-style: italic;
-        }
-        .tool-status {
-            margin-bottom: 8px; padding: 6px 10px; font-size: 12px;
-            color: var(--accent); background: var(--accent-dim);
-            border-radius: var(--radius); white-space: pre-wrap;
+            font-size: 13px;
         }
         .thinking {
             margin-bottom: 8px; font-size: 12px; color: var(--text-dim);
         }
-        .thinking summary { cursor: pointer; }
+        .thinking summary {
+            cursor: pointer; color: var(--text-secondary);
+            font-size: 12px; user-select: none;
+        }
         .thinking pre {
-            margin: 4px 0 0; white-space: pre-wrap; font-size: 11px;
+            margin: 6px 0 0; white-space: pre-wrap; font-size: 12px;
             max-height: 200px; overflow-y: auto; color: var(--text-dim);
+            background: var(--bg-secondary); padding: 8px; border-radius: var(--radius);
         }
         .source-extract-panel {
-            margin: 4px 0; padding: 12px 14px;
-            background: var(--bg-secondary); border: 1px solid var(--border);
-            border-radius: var(--radius);
+            margin: 4px 0; padding: 14px 16px;
+            background: var(--bg-primary); border: 1px solid var(--border-light);
+            border-radius: var(--radius-lg); box-shadow: var(--shadow);
         }
-        .source-extract-panel label:hover {
-            background: var(--bg-tertiary, rgba(255,255,255,0.03));
-            border-radius: 4px;
+        .source-extract-panel .source-entry {
+            display: flex; gap: 8px; align-items: flex-start;
+            margin-bottom: 8px; font-size: 13px;
+            padding: 6px 8px; border-radius: var(--radius);
+            transition: background 0.1s;
         }
-        .search-results {
-            margin-top: 8px; padding: 8px 12px; background: var(--bg-secondary);
-            border-radius: var(--radius); font-size: 12px;
-        }
-        .search-results a { color: var(--accent); text-decoration: none; }
-        .search-results a:hover { text-decoration: underline; }
+        .source-extract-panel .source-entry:hover { background: var(--bg-tertiary); }
         .chat-input-bar {
-            padding: 12px 16px; border-top: 1px solid var(--border);
+            padding: 12px 20px; border-top: 1px solid var(--border);
             display: flex; gap: 8px; flex-shrink: 0;
+            background: var(--bg-primary);
         }
         .chat-input-bar textarea {
-            flex: 1; padding: 10px 14px; background: var(--bg-input);
-            border: 1px solid var(--border); border-radius: var(--radius-lg);
+            flex: 1; padding: 10px 14px; background: var(--bg-secondary);
+            border: 1px solid var(--border); border-radius: 24px;
             color: var(--text-primary); font-size: 14px; resize: none;
             outline: none; min-height: 44px; max-height: 120px;
             font-family: inherit;
         }
-        .chat-input-bar textarea:focus { border-color: var(--accent); }
+        .chat-input-bar textarea:focus { border-color: var(--accent); background: var(--bg-primary); }
         .chat-input-bar .send-btn {
             width: 44px; height: 44px; border-radius: 50%; border: none;
-            background: var(--accent); color: #0a0a1a; font-size: 18px;
+            background: var(--accent); color: #fff; font-size: 18px;
             cursor: pointer; display: flex; align-items: center; justify-content: center;
             flex-shrink: 0; transition: background 0.15s;
         }
@@ -196,37 +195,35 @@
 
         /* ── Right: Chat Logs ── */
         .col-logs {
-            border-left: 1px solid var(--border);
+            border-left: 1px solid var(--border); background: var(--bg-primary);
             display: flex; flex-direction: column; overflow: hidden;
         }
-        .log-list {
-            flex: 1; overflow-y: auto; padding: 8px;
-        }
+        .log-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
         .log-item {
-            padding: 10px 12px; border-radius: var(--radius); margin-bottom: 4px;
+            padding: 8px 10px; border-radius: var(--radius); margin-bottom: 2px;
             font-size: 13px; cursor: pointer; display: flex; align-items: center;
             justify-content: space-between; transition: background 0.1s;
         }
-        .log-item:hover { background: var(--bg-hover); }
-        .log-item.active { background: var(--accent-dim); border: 1px solid var(--accent); }
+        .log-item:hover { background: var(--bg-tertiary); }
+        .log-item.active { background: var(--accent-light); color: var(--accent); font-weight: 500; }
         .log-item .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .log-item .actions { display: flex; gap: 4px; }
+        .log-item .actions { display: flex; gap: 2px; }
         .log-item .actions button {
             background: none; border: none; color: var(--text-dim);
-            cursor: pointer; font-size: 13px; padding: 2px;
+            cursor: pointer; font-size: 13px; padding: 2px 4px; border-radius: 4px;
         }
-        .log-item .actions button:hover { color: var(--accent); }
+        .log-item .actions button:hover { background: var(--bg-tertiary); color: var(--text-primary); }
         .log-actions {
-            padding: 12px; border-top: 1px solid var(--border); flex-shrink: 0;
+            padding: 10px 12px; border-top: 1px solid var(--border-light); flex-shrink: 0;
         }
 
         /* ── Shared ── */
         .btn {
-            padding: 8px 14px; border-radius: var(--radius); border: none;
-            font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+            padding: 8px 16px; border-radius: var(--radius); border: none;
+            font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s;
             width: 100%;
         }
-        .btn-primary { background: var(--accent); color: #0a0a1a; }
+        .btn-primary { background: var(--accent); color: #fff; }
         .btn-primary:hover { background: var(--accent-hover); }
         .btn-outline {
             background: transparent; color: var(--text-secondary);
@@ -234,27 +231,28 @@
         }
         .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
         .btn-load {
-            background: linear-gradient(135deg, #4fc3f7, #29b6f6);
-            color: #0a0a1a; font-weight: 700;
+            background: var(--accent); color: #fff; font-weight: 500;
         }
+        .btn-load:hover { background: var(--accent-hover); }
         .btn + .btn { margin-top: 6px; }
         .loading { animation: pulse 1.5s ease-in-out infinite; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
         /* ── Modal ── */
         .modal-overlay {
-            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.3);
             z-index: 100; align-items: center; justify-content: center;
         }
         .modal-overlay.show { display: flex; }
         .modal {
-            background: var(--bg-secondary); border: 1px solid var(--border);
+            background: var(--bg-primary); border: 1px solid var(--border);
             border-radius: var(--radius-lg); padding: 24px; width: 480px; max-width: 90vw;
+            box-shadow: 0 8px 24px rgba(60,64,67,0.2);
         }
-        .modal h3 { margin-bottom: 16px; font-size: 16px; }
+        .modal h3 { margin-bottom: 16px; font-size: 16px; font-weight: 500; }
         .modal input[type="file"], .modal textarea, .modal input[type="text"] {
-            width: 100%; padding: 10px; margin-bottom: 12px;
-            background: var(--bg-input); border: 1px solid var(--border);
+            width: 100%; padding: 10px 12px; margin-bottom: 12px;
+            background: var(--bg-secondary); border: 1px solid var(--border);
             border-radius: var(--radius); color: var(--text-primary);
             font-size: 13px; font-family: inherit;
         }
@@ -267,14 +265,6 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
-        .msg-assistant { line-height: 1.6; }
-        .msg-assistant h1, .msg-assistant h2, .msg-assistant h3 { margin: 8px 0 4px; }
-        .msg-assistant p { margin: 4px 0; }
-        .msg-assistant ul, .msg-assistant ol { margin: 4px 0; padding-left: 20px; }
-        .msg-assistant code { background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; font-size: 13px; }
-        .msg-assistant pre { background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; overflow-x: auto; }
-        .msg-assistant pre code { background: none; padding: 0; }
-        .msg-assistant blockquote { border-left: 3px solid var(--accent); padding-left: 10px; margin: 4px 0; color: var(--text-dim); }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -285,6 +275,10 @@
             <a href="/" class="back">&larr;</a>
             <h1>{{ notebook.name }}</h1>
             <span class="badge" id="source-count">{{ sources|length }} sources</span>
+        </div>
+        <div id="vllm-status" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);">
+            <span id="vllm-dot" style="width:8px;height:8px;border-radius:50%;background:var(--text-dim);"></span>
+            <span id="vllm-label">vLLM: checking...</span>
         </div>
     </div>
 
@@ -301,7 +295,7 @@
                 <div class="source-item" id="src-{{ s.id }}" onclick="previewSource('{{ s.id }}')" style="cursor:pointer;">
                     <span class="status {{ 'status-loaded' if s.loaded else 'status-pending' }}"></span>
                     <span class="name" title="{{ s.filename }}">{{ s.filename }}</span>
-                    <button class="del-btn" onclick="event.stopPropagation();deleteSource('{{ s.id }}')" title="Delete">✕</button>
+                    <button class="del-btn" onclick="event.stopPropagation();deleteSource('{{ s.id }}')" title="Delete">&times;</button>
                 </div>
                 {% endfor %}
             </div>
@@ -315,11 +309,8 @@
         <!-- CENTER: Chat -->
         <div class="col-chat">
             <div class="chat-toolbar">
-                <label class="toggle">
-                    <input type="checkbox" id="enable-search"> Web Search
-                </label>
                 <input type="hidden" id="temperature" value="0.1">
-                <button class="btn btn-outline" style="width:auto;padding:4px 10px;margin-left:auto;" onclick="openSettingsModal()">Settings</button>
+                <button class="btn btn-outline" style="width:auto;padding:4px 8px;margin-left:auto;font-size:12px;" onclick="openSettingsModal()">Settings</button>
             </div>
             <div class="chat-messages" id="chat-messages">
                 <div class="msg msg-system">Add sources and click "Load Sources" to get started</div>
@@ -334,7 +325,7 @@
         <!-- RIGHT: Chat Logs -->
         <div class="col-logs">
             <div class="col-title">
-                Chat History
+                History
                 <button class="btn btn-outline" style="width:auto;padding:4px 10px;" onclick="newChatlog()">+ New</button>
             </div>
             <div class="log-list" id="log-list">
@@ -342,8 +333,8 @@
                 <div class="log-item" id="log-{{ cl.id }}" onclick="loadChatlog('{{ cl.id }}')">
                     <span class="title">{{ cl.title }}</span>
                     <div class="actions">
-                        <button onclick="event.stopPropagation();downloadChatlog('{{ cl.id }}')" title="Download">&#11015;</button>
-                        <button onclick="event.stopPropagation();deleteChatlog('{{ cl.id }}')" title="Delete">✕</button>
+                        <button onclick="event.stopPropagation();downloadChatlog('{{ cl.id }}')" title="Download">&#8595;</button>
+                        <button onclick="event.stopPropagation();deleteChatlog('{{ cl.id }}')" title="Delete">&times;</button>
                     </div>
                 </div>
                 {% endfor %}
@@ -388,11 +379,11 @@
         <div class="modal" style="width:640px;max-height:80vh;display:flex;flex-direction:column;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                 <h3 id="preview-title" style="margin:0;">Source Preview</h3>
-                <button class="btn btn-outline" style="width:auto;padding:4px 10px;" onclick="closePreviewModal()">Close</button>
+                <button class="btn btn-outline" style="width:auto;padding:4px 12px;" onclick="closePreviewModal()">Close</button>
             </div>
             <div id="preview-meta" style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;"></div>
             <div id="preview-content" style="flex:1;overflow-y:auto;white-space:pre-wrap;font-size:13px;
-                background:var(--bg-input);padding:12px;border-radius:var(--radius);max-height:60vh;word-break:break-word;"></div>
+                background:var(--bg-secondary);padding:12px;border-radius:var(--radius);max-height:60vh;word-break:break-word;"></div>
         </div>
     </div>
 
@@ -401,7 +392,28 @@
     let currentChatlogId = null;
     let isStreaming = false;
 
-    // ── Upload Modal ──
+    // ── vLLM Status ──
+    async function pollVllmStatus() {
+        try {
+            const r = await fetch('/api/vllm/status');
+            const s = await r.json();
+            const dot = document.getElementById('vllm-dot');
+            const label = document.getElementById('vllm-label');
+            if (s.ready) {
+                dot.style.background = 'var(--success)';
+                label.textContent = s.pid ? `vLLM: running (PID ${s.pid})` : 'vLLM: running';
+            } else if (s.pid) {
+                dot.style.background = 'var(--warning)';
+                label.textContent = `vLLM: starting (PID ${s.pid})`;
+            } else {
+                dot.style.background = 'var(--text-dim)';
+                label.textContent = 'vLLM: offline';
+            }
+        } catch { }
+    }
+    pollVllmStatus();
+    setInterval(pollVllmStatus, 5000);
+
     // ── Modals ──
     function openUploadModal() { document.getElementById('upload-modal').classList.add('show'); }
     function closeUploadModal() { document.getElementById('upload-modal').classList.remove('show'); }
@@ -471,11 +483,8 @@
         btn.classList.add('loading');
         btn.disabled = true;
         try {
-            const r = await fetch('/api/sources/load/' + NB_ID, {
-                method: 'POST',
-            });
+            const r = await fetch('/api/sources/load/' + NB_ID, { method: 'POST' });
             const data = await r.json();
-            const total = (data.loaded || 0) + (data.backfilled || 0);
             btn.textContent = `Done — ${data.loaded || 0} loaded, ${data.backfilled || 0} updated`;
             btn.classList.remove('loading');
             setTimeout(() => location.reload(), 1000);
@@ -501,8 +510,8 @@
         div.onclick = () => loadChatlog(data.id);
         div.innerHTML = `<span class="title">${data.title}</span>
             <div class="actions">
-                <button onclick="event.stopPropagation();downloadChatlog('${data.id}')" title="Download">&#11015;</button>
-                <button onclick="event.stopPropagation();deleteChatlog('${data.id}')" title="Delete">✕</button>
+                <button onclick="event.stopPropagation();downloadChatlog('${data.id}')" title="Download">&#8595;</button>
+                <button onclick="event.stopPropagation();deleteChatlog('${data.id}')" title="Delete">&times;</button>
             </div>`;
         list.prepend(div);
         document.querySelectorAll('.log-item').forEach(el => {
@@ -516,12 +525,11 @@
         currentChatlogId = id;
         document.querySelectorAll('.log-item').forEach(el => el.classList.remove('active'));
         document.getElementById('log-' + id)?.classList.add('active');
-
         const r = await fetch('/api/chatlogs/' + id + '/messages');
         const msgs = await r.json();
         const container = document.getElementById('chat-messages');
         container.innerHTML = '';
-        msgs.forEach(m => appendMessage(m.role, m.content, null, m.search_results));
+        msgs.forEach(m => appendMessage(m.role, m.content));
         container.scrollTop = container.scrollHeight;
     }
 
@@ -541,7 +549,7 @@
     }
 
     // ── Chat ──
-    function appendMessage(role, content, searchResults) {
+    function appendMessage(role, content) {
         const container = document.getElementById('chat-messages');
         const div = document.createElement('div');
         div.className = `msg msg-${role}`;
@@ -550,30 +558,14 @@
             contentDiv.innerHTML = marked.parse(content);
             div.appendChild(contentDiv);
         } else {
-            const textNode = document.createTextNode(content || '');
-            div.appendChild(textNode);
+            div.appendChild(document.createTextNode(content || ''));
         }
-
-        if (searchResults) {
-            try {
-                const sr = typeof searchResults === 'string' ? JSON.parse(searchResults) : searchResults;
-                if (sr.length > 0) {
-                    const box = document.createElement('div');
-                    box.className = 'search-results';
-                    box.innerHTML = '<strong>Search results:</strong><br>' +
-                        sr.map(r => `<a href="${r.url}" target="_blank">${r.title}</a>`).join('<br>');
-                    div.appendChild(box);
-                }
-            } catch {}
-        }
-
         container.appendChild(div);
         return div;
     }
 
     let pendingMessage = '';
     let pendingSourceIds = [];
-    let pendingExtractId = '';
 
     async function sendMessage() {
         if (isStreaming) return;
@@ -581,9 +573,7 @@
         const message = input.value.trim();
         if (!message) return;
 
-        if (!currentChatlogId) {
-            await newChatlog();
-        }
+        if (!currentChatlogId) await newChatlog();
 
         input.value = '';
         appendMessage('user', message);
@@ -591,81 +581,54 @@
 
         const container = document.getElementById('chat-messages');
 
-        // Step 1-3: Extract keywords and search sources
+        // Extract step: find matching sources
         const extractDiv = document.createElement('div');
-        extractDiv.className = 'msg assistant';
-        extractDiv.innerHTML = '<span style="color:#888">Extracting sources...</span>';
+        extractDiv.className = 'msg msg-assistant';
+        extractDiv.innerHTML = '<span style="color:var(--text-dim)">Finding sources...</span>';
         container.appendChild(extractDiv);
         container.scrollTop = container.scrollHeight;
 
         try {
-            const enableSearch = document.getElementById('enable-search').checked;
             const resp = await fetch('/api/sources/extract', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ notebook_id: NB_ID, message: message, enable_search: enableSearch }),
+                body: JSON.stringify({ notebook_id: NB_ID, message }),
             });
             const data = await resp.json();
-            pendingExtractId = data.extract_id || '';
             const hasSources = data.sources && data.sources.length > 0;
-            const hasWeb = data.web_results && data.web_results.length > 0;
 
-            if (hasSources || hasWeb) {
-                let html = `<div class="source-extract-panel">`;
-                html += `<div style="margin-bottom:8px;color:#888;font-size:0.85em">Keywords: <code>${data.keywords}</code></div>`;
-                if (hasSources) {
-                    html += `<div style="margin-bottom:8px;font-weight:600">Local Sources (${data.sources.length})</div>`;
-                    data.sources.forEach((s) => {
-                        html += `<label style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px;font-size:0.9em;cursor:pointer">`;
-                        html += `<input type="checkbox" checked data-source-id="${s.id}" class="source-check" style="margin-top:3px">`;
-                        html += `<span><strong>${s.filename}</strong><br><span style="color:#999;font-size:0.85em">${s.summary.substring(0,120)}... (~${s.token_estimate} tokens)</span></span>`;
-                        html += `</label>`;
-                    });
-                }
-                if (hasWeb) {
-                    html += `<div style="margin:12px 0 8px;font-weight:600;color:var(--accent)">Web Results (${data.web_results.length})</div>`;
-                    data.web_results.forEach((w) => {
-                        html += `<label style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px;font-size:0.9em;cursor:pointer">`;
-                        html += `<input type="checkbox" checked data-web-url="${w.url}" class="web-check" style="margin-top:3px">`;
-                        html += `<span><strong>${w.title}</strong><br><span style="color:#999;font-size:0.85em">${w.snippet.substring(0,150)}</span><br><a href="${w.url}" target="_blank" style="font-size:0.8em;color:var(--accent)">${w.url.substring(0,80)}</a></span>`;
-                        html += `</label>`;
-                    });
-                }
-                html += `<button class="btn" onclick="executeWithSources()" style="margin-top:10px;padding:6px 20px">Execute</button>`;
-                html += `</div>`;
+            pendingSourceIds = (data.sources || []).map(s => s.id);
+
+            if (hasSources) {
+                let html = '<div class="source-extract-panel">';
+                html += `<div style="margin-bottom:8px;color:var(--text-dim);font-size:12px">Keywords: <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:3px">${data.keywords}</code></div>`;
+                html += `<div style="margin-bottom:6px;font-size:12px;font-weight:500;color:var(--text-secondary)">Sources (${data.sources.length})</div>`;
+                data.sources.forEach(s => {
+                    html += `<div class="source-entry">`;
+                    html += `<span style="color:var(--success);font-size:10px;margin-top:3px">&#9679;</span>`;
+                    html += `<span><strong style="font-size:13px">${s.filename}</strong><br><span style="color:var(--text-dim);font-size:12px">${s.summary.substring(0,120)}... (~${s.token_estimate} tok)</span></span>`;
+                    html += `</div>`;
+                });
+                html += `<button class="btn btn-primary" onclick="executeStream()" style="margin-top:10px;padding:8px 24px">Generate</button>`;
+                html += '</div>';
                 extractDiv.innerHTML = html;
             } else {
-                extractDiv.innerHTML = '<span style="color:#888">No matching sources found. Proceeding without RAG context...</span>';
+                extractDiv.innerHTML = '<span style="color:var(--text-dim)">No matching sources. Generating from general knowledge...</span>';
                 pendingSourceIds = [];
                 await executeStream();
             }
         } catch (e) {
-            extractDiv.innerHTML = `<span style="color:#c00">Source extraction failed: ${e.message}. Proceeding...</span>`;
+            extractDiv.innerHTML = `<span style="color:var(--danger)">Source extraction failed: ${e.message}</span>`;
             pendingSourceIds = [];
             await executeStream();
         }
         container.scrollTop = container.scrollHeight;
     }
 
-    let pendingWebUrls = [];
-
-    function executeWithSources() {
-        pendingSourceIds = [];
-        document.querySelectorAll('.source-check').forEach(cb => {
-            if (cb.checked) pendingSourceIds.push(cb.dataset.sourceId);
-        });
-        pendingWebUrls = [];
-        document.querySelectorAll('.web-check').forEach(cb => {
-            if (cb.checked) pendingWebUrls.push(cb.dataset.webUrl);
-        });
-        executeStream();
-    }
-
     async function executeStream() {
         const container = document.getElementById('chat-messages');
         const assistantDiv = appendMessage('assistant', '');
         container.scrollTop = container.scrollHeight;
-        let streamedText = '';
 
         isStreaming = true;
         document.getElementById('send-btn').disabled = true;
@@ -678,12 +641,9 @@
                     notebook_id: NB_ID,
                     message: pendingMessage,
                     chatlog_id: currentChatlogId,
-                    enable_search: document.getElementById('enable-search').checked,
                     system_prompt: document.getElementById('system-prompt').value,
                     temperature: parseFloat(document.getElementById('temperature').value),
                     source_ids: pendingSourceIds,
-                    web_urls: pendingWebUrls,
-                    extract_id: pendingExtractId,
                 }),
             });
 
@@ -703,43 +663,42 @@
                     if (!line.startsWith('data: ')) continue;
                     try {
                         const data = JSON.parse(line.slice(6));
-                        if (data.type === 'tool_status') {
-                            if (!assistantDiv.querySelector('.tool-status')) {
-                                const ts = document.createElement('div');
-                                ts.className = 'tool-status';
-                                assistantDiv.insertBefore(ts, assistantDiv.firstChild);
-                            }
-                            assistantDiv.querySelector('.tool-status').textContent += data.content;
-                            container.scrollTop = container.scrollHeight;
-                        } else if (data.type === 'thinking') {
+                        if (data.type === 'thinking') {
+                            // Stream thinking in real-time
                             if (!assistantDiv.querySelector('.thinking')) {
                                 const details = document.createElement('details');
                                 details.className = 'thinking';
+                                details.open = true;
                                 details.innerHTML = '<summary>Thinking...</summary><pre></pre>';
                                 assistantDiv.insertBefore(details, assistantDiv.firstChild);
                             }
                             assistantDiv.querySelector('.thinking pre').textContent += data.content;
                             container.scrollTop = container.scrollHeight;
-                        } else if (data.type === 'chunk') {
-                            streamedText += data.content;
-                            assistantDiv.lastChild.textContent = streamedText;
+                        } else if (data.type === 'content') {
+                            // Complete content arrives as single block — render markdown
+                            const mdDiv = document.createElement('div');
+                            mdDiv.innerHTML = marked.parse(data.content);
+                            // Replace any existing text node
+                            if (assistantDiv.lastChild && assistantDiv.lastChild.nodeType === 3) {
+                                assistantDiv.replaceChild(mdDiv, assistantDiv.lastChild);
+                            } else {
+                                assistantDiv.appendChild(mdDiv);
+                            }
                             container.scrollTop = container.scrollHeight;
                         } else if (data.type === 'error') {
-                            streamedText += '\nError: ' + data.content;
-                            assistantDiv.lastChild.textContent = streamedText;
+                            const errDiv = document.createElement('div');
+                            errDiv.style.color = 'var(--danger)';
+                            errDiv.textContent = 'Error: ' + data.content;
+                            assistantDiv.appendChild(errDiv);
                         }
                     } catch {}
                 }
             }
         } catch (e) {
-            streamedText += '\nConnection error: ' + e.message;
-        }
-
-        // Render markdown after stream completes
-        if (streamedText) {
-            const mdDiv = document.createElement('div');
-            mdDiv.innerHTML = marked.parse(streamedText);
-            assistantDiv.replaceChild(mdDiv, assistantDiv.lastChild);
+            const errDiv = document.createElement('div');
+            errDiv.style.color = 'var(--danger)';
+            errDiv.textContent = 'Connection error: ' + e.message;
+            assistantDiv.appendChild(errDiv);
         }
 
         isStreaming = false;
