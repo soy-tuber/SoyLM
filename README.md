@@ -4,18 +4,17 @@ Local-first RAG tool powered by [Nemotron-Nano-9B-v2-Japanese](https://huggingfa
 
 ## What it does
 
-Upload documents, URLs, or YouTube videos as sources. SoyLM analyzes them with a local LLM, stores structured summaries in SQLite, and lets you chat with your sources using RAG (FTS5 + BM25) and optional web search (DuckDuckGo).
+Upload documents, URLs, or YouTube videos as sources. SoyLM analyzes them with a local LLM, stores structured summaries in SQLite, and lets you chat with your sources using RAG (FTS5 + BM25).
 
 ## Features
 
-- **Source ingestion** — Files, web URLs (with Playwright JS rendering fallback), YouTube transcripts
-- **Local LLM** — Nemotron-Nano-9B via vLLM (OpenAI-compatible API), thinking mode for inference
-- **Tool calling** — Nemotron decides when to search via `<TOOLCALL>` (agent loop, max 3 rounds)
-- **RAG search** — SQLite FTS5 full-text search with BM25 ranking
-- **Web search** — DuckDuckGo integration, invoked autonomously by LLM when search is enabled
-- **SSE streaming** — Real-time streamed responses
+- **Source ingestion** — Files, web URLs (with Playwright JS rendering fallback), YouTube transcripts, paste text
+- **Local LLM** — Nemotron-Nano-9B via vLLM (OpenAI-compatible API), thinking mode for reasoning
+- **RAG search** — LLM keyword extraction (JA→EN) + SQLite FTS5 full-text search with BM25 ranking
+- **SSE streaming** — Thinking streamed in real-time, content sent as complete block
 - **Chat history** — Persistent chat logs with JSON export
 - **Deduplication** — SHA-256 hash prevents duplicate sources
+- **Gateway integration** — vLLM lifecycle managed by Nemotron Gateway (auto-start, idle stop)
 
 ## Architecture
 
@@ -26,12 +25,11 @@ Browser (Jinja2 SSR + vanilla JS)
   └── Chat history      ← logs + export
         │
         ▼
-FastAPI backend (single file: app.py)
-  ├── Nemotron (vLLM localhost:8000)
+FastAPI backend (app.py + search.py + tools.py)
+  ├── Nemotron Gateway (localhost:8000) → vLLM (localhost:8100)
   ├── SQLite (soylm.db) + FTS5
   ├── Playwright (JS-rendered pages)
-  ├── youtube-transcript-api
-  └── DuckDuckGo search (ddgs)
+  └── youtube-transcript-api
 ```
 
 ## Setup
@@ -53,21 +51,12 @@ playwright install chromium
 ### Run
 
 ```bash
-# Start vLLM with Nemotron parser plugins (tool calling + reasoning)
-vllm serve nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese \
-  --trust-remote-code \
-  --tool-call-parser nemotron_json \
-  --tool-parser-plugin nemotron_toolcall_parser_streaming.py \
-  --reasoning-parser nemotron_nano_v2 \
-  --reasoning-parser-plugin nemotron_nano_v2_reasoning_parser.py \
-  --enable-auto-tool-choice \
-  --enable-prefix-caching
+# Option 1: Use start.sh (starts vLLM + app)
+./start.sh
 
-# Then start SoyLM
-uvicorn app:app --host 0.0.0.0 --port 8080 --reload
+# Option 2: If Nemotron Gateway is running on 8000
+uvicorn app:app --host 0.0.0.0 --port 8080
 ```
-
-> **Parser plugins**: Nemotron v2 uses `<TOOLCALL>` as regular text tokens, not dedicated tokenizer tokens. vLLM's built-in parsers (qwen3_coder, nemotron_v3) don't work for this model. The plugin-based parsers from [NeMo](https://github.com/NVIDIA/NeMo) are the correct approach. See [nemoclaw-local-inference-guide](https://github.com/soy-tuber/nemoclaw-local-inference-guide) for details.
 
 Open `http://localhost:8080`
 
@@ -75,24 +64,26 @@ Open `http://localhost:8080`
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEMOTRON_BASE` | `http://localhost:8000/v1` | vLLM endpoint |
+| `NEMOTRON_BASE` | `http://localhost:8000/v1` | LLM endpoint (Gateway) |
 | `NEMOTRON_MODEL` | `nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese` | Model name |
+| `STREAM_MAX_TOKENS` | `8192` | Max tokens per streaming response |
 
 ## Usage
 
 1. Create a notebook
-2. Add sources (files, URLs, YouTube links)
+2. Add sources (files, URLs, YouTube links, or paste text)
 3. Click **Load Sources** to analyze with LLM
-4. Ask a question — matched local sources + web results are shown with checkboxes
-5. Select relevant sources and click **Execute** to generate
-
-Toggle **Web Search** to include DuckDuckGo results alongside local sources.
+4. Ask a question — matching sources are extracted automatically via FTS5
+5. Click **Generate** to get a grounded answer with source citations
 
 ## File structure
 
 ```
 SoyLM/
-├── app.py              # All backend logic
+├── app.py              # FastAPI backend + RAG logic
+├── search.py           # Web fetching (URL, Playwright, YouTube)
+├── tools.py            # Tool definitions (preserved for future use)
+├── start.sh            # Convenience launcher (vLLM + app)
 ├── templates/
 │   ├── index.html      # Home (notebook list)
 │   └── notebook.html   # Main 3-column UI
