@@ -127,7 +127,7 @@ Relevant fixes and features in vLLM v0.15.0–v0.15.1 for Mamba2+Attention hybri
 | Version | Feature |
 |---|---|
 | v0.14.0+ (available) | `--default-chat-template-kwargs` — set `enable_thinking` server-wide instead of per-request |
-| v0.18.0+ | `max_thinking_tokens` ([PR #20859](https://github.com/vllm-project/vllm/pull/20859)) — hard limit on thinking tokens via logit processor. Solves thinking budget problem at vLLM level. **Requires significant rebuild to upgrade from v0.15.1.** |
+| v0.18.0+ | `max_thinking_tokens` ([PR #20859](https://github.com/vllm-project/vllm/pull/20859)) — hard limit on thinking tokens via logit processor. **Do not upgrade**: v0.18.0 introduces regressions with Nemotron-Nano-9B-v2-Japanese — the model outputs English instead of Japanese, and the corruption propagates to other services sharing the same vLLM instance. Stay on v0.15.1. |
 
 ### Open issues
 
