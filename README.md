@@ -89,12 +89,17 @@ SoyLM/
 
 ## Appendix: Prefix caching bug with Mamba2 hybrid models
 
-vLLM's `--enable-prefix-caching` causes issues with Nemotron-Nano-9B (Mamba2+Attention hybrid architecture). Specifically:
+vLLM's `--enable-prefix-caching` is **not recommended** with Nemotron-Nano-9B (Mamba2+Attention hybrid architecture). Even on v0.15.1 where the NaN crash is fixed, prefix caching corrupts the SSM state and destroys thinking quality.
 
-- **[vllm#27264](https://github.com/vllm-project/vllm/issues/27264)**: Prefix caching + `--mamba_ssm_cache_dtype float32` produces NaN outputs due to block table wraparound. Fixed in [PR #27753](https://github.com/vllm-project/vllm/pull/27753) (vLLM v0.15.1+).
-- **`enable_thinking` mismatch**: Nemotron's chat template appends different tokens depending on the `enable_thinking` flag (`<think></think>` vs `<think>\n`). If a prefix cache warmup uses a different `enable_thinking` value than the actual streaming request, the final token block differs and the cache misses entirely.
+### Symptoms
 
-SoyLM v3 disables prefix cache warmup to avoid these issues.
+- **NaN outputs** ([vllm#27264](https://github.com/vllm-project/vllm/issues/27264)): Prefix caching + `--mamba_ssm_cache_dtype float32` produces NaN outputs. Fixed numerically in [PR #27753](https://github.com/vllm-project/vllm/pull/27753) (v0.12.0+), but this only eliminates the NaN crash — it does not fix SSM state integrity.
+- **Thinking corruption** (confirmed on v0.15.1): With prefix caching enabled, thinking tokens degrade into garbage (`is do f s aa`). The SSM state is initialized with incorrect values from the cache, and all subsequent decoding is destroyed. NaN gone ≠ correct behavior.
+- **`enable_thinking` mismatch**: Nemotron's chat template appends different final tokens depending on `enable_thinking` (`<think></think>` vs `<think>\n`). Warmup and streaming with different values cause cache miss on the last block.
+
+### Resolution
+
+Disable prefix caching entirely and increase `max_tokens` to compensate. This is the only reliable configuration for Mamba2 hybrid models in production as of v0.15.1.
 
 ## Appendix 2: vLLM v0.15.1 notes for Nemotron hybrid models
 
@@ -111,7 +116,7 @@ Relevant fixes and features in vLLM v0.15.0–v0.15.1 for Mamba2+Attention hybri
 
 ### New in v0.15.0: Mamba prefix caching align mode
 
-[PR #30877](https://github.com/vllm-project/vllm/pull/30877) adds `--mamba-cache-mode align` for block-aligned prefix caching of Mamba/hybrid models. Caches Mamba states directly for ~2x speedup on repeated context (e.g., RAG system prompts). **Not recommended for SoyLM at this time** — see Appendix 1 for known issues with prefix caching on this architecture.
+[PR #30877](https://github.com/vllm-project/vllm/pull/30877) adds `--mamba-cache-mode align` for block-aligned prefix caching of Mamba/hybrid models. Caches Mamba states directly for ~2x speedup on repeated context (e.g., RAG system prompts). **Do not use** — prefix caching corrupts SSM state on Mamba2 hybrid models even after NaN fix. See Appendix 1.
 
 ```
 --enable-prefix-caching --mamba-cache-mode align
