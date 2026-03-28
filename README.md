@@ -96,6 +96,38 @@ vLLM's `--enable-prefix-caching` causes issues with Nemotron-Nano-9B (Mamba2+Att
 
 SoyLM v3 disables prefix cache warmup to avoid these issues.
 
+## Appendix 2: vLLM v0.15.1 notes for Nemotron hybrid models
+
+Relevant fixes and features in vLLM v0.15.0–v0.15.1 for Mamba2+Attention hybrid architectures.
+
+### Fixes in v0.15.1
+
+| PR | Description |
+|---|---|
+| [#27753](https://github.com/vllm-project/vllm/pull/27753) | NaN fix: passes kernel block size to builders, preventing FlashAttention from reading NaN-filled partial blocks in fp32 Mamba SSM cache. Tested with Nemotron-Nano-9B-v2 + `--mamba_ssm_cache_dtype float32`. |
+| [#33524](https://github.com/vllm-project/vllm/pull/33524) | Fixes prefix cache hit rate = 0% for hybrid attention models (1 Full Attn group + 1 SWA group). |
+| [#33417](https://github.com/vllm-project/vllm/pull/33417) | SM120 (RTX Blackwell) support for NVFP4 MoE kernels. |
+| [#33189](https://github.com/vllm-project/vllm/pull/33189) | Lazy load cv2 in `nemotron_parse.py` (import error fix). |
+
+### New in v0.15.0: Mamba prefix caching align mode
+
+[PR #30877](https://github.com/vllm-project/vllm/pull/30877) adds `--mamba-cache-mode align` for block-aligned prefix caching of Mamba/hybrid models. Caches Mamba states directly for ~2x speedup on repeated context (e.g., RAG system prompts). **Not recommended for SoyLM at this time** — see Appendix 1 for known issues with prefix caching on this architecture.
+
+```
+--enable-prefix-caching --mamba-cache-mode align
+```
+
+### Future versions
+
+| Version | Feature |
+|---|---|
+| v0.14.0+ (available) | `--default-chat-template-kwargs` — set `enable_thinking` server-wide instead of per-request |
+| v0.18.0+ | `max_thinking_tokens` ([PR #20859](https://github.com/vllm-project/vllm/pull/20859)) — hard limit on thinking tokens via logit processor. Solves thinking budget problem at vLLM level. |
+
+### Open issues
+
+- [#26936](https://github.com/vllm-project/vllm/issues/26936): Hybrid Attention models broken after flashinfer 0.4 — partially addressed by #27753, still open.
+
 ## License
 
 MIT
