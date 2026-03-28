@@ -14,7 +14,6 @@ Upload documents, URLs, or YouTube videos as sources. SoyLM analyzes them with a
 - **SSE streaming** — Thinking streamed in real-time, content sent as complete block
 - **Chat history** — Persistent chat logs with JSON export
 - **Deduplication** — SHA-256 hash prevents duplicate sources
-- **Gateway integration** — vLLM lifecycle managed by Nemotron Gateway (auto-start, idle stop)
 
 ## Architecture
 
@@ -25,11 +24,10 @@ Browser (Jinja2 SSR + vanilla JS)
   └── Chat history      ← logs + export
         │
         ▼
-FastAPI backend (app.py + search.py + tools.py)
-  ├── Nemotron Gateway (localhost:8000) → vLLM (localhost:8100)
+FastAPI backend (app.py + search.py)
+  ├── Nemotron (vLLM, OpenAI-compatible API)
   ├── SQLite (soylm.db) + FTS5
-  ├── Playwright (JS-rendered pages)
-  └── youtube-transcript-api
+  └── search.py (URL fetch, YouTube transcripts, Playwright fallback)
 ```
 
 ## Setup
@@ -37,7 +35,7 @@ FastAPI backend (app.py + search.py + tools.py)
 ### Prerequisites
 
 - Python 3.11+
-- NVIDIA GPU with vLLM serving Nemotron (or any OpenAI-compatible endpoint)
+- NVIDIA GPU with vLLM serving Nemotron-Nano-9B
 
 ### Install
 
@@ -51,10 +49,7 @@ playwright install chromium
 ### Run
 
 ```bash
-# Option 1: Use start.sh (starts vLLM + app)
-./start.sh
-
-# Option 2: If Nemotron Gateway is running on 8000
+# vLLM must be running (directly or via Gateway)
 uvicorn app:app --host 0.0.0.0 --port 8080
 ```
 
@@ -64,7 +59,7 @@ Open `http://localhost:8080`
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEMOTRON_BASE` | `http://localhost:8000/v1` | LLM endpoint (Gateway) |
+| `NEMOTRON_BASE` | `http://localhost:8000/v1` | vLLM endpoint (OpenAI-compatible) |
 | `NEMOTRON_MODEL` | `nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese` | Model name |
 | `STREAM_MAX_TOKENS` | `8192` | Max tokens per streaming response |
 
@@ -91,6 +86,15 @@ SoyLM/
 │   └── soylm.db        # SQLite database
 └── requirements.txt
 ```
+
+## Appendix: Prefix caching bug with Mamba2 hybrid models
+
+vLLM's `--enable-prefix-caching` causes issues with Nemotron-Nano-9B (Mamba2+Attention hybrid architecture). Specifically:
+
+- **[vllm#27264](https://github.com/vllm-project/vllm/issues/27264)**: Prefix caching + `--mamba_ssm_cache_dtype float32` produces NaN outputs due to block table wraparound. Fixed in [PR #27753](https://github.com/vllm-project/vllm/pull/27753) (vLLM v0.15.1+).
+- **`enable_thinking` mismatch**: Nemotron's chat template appends different tokens depending on the `enable_thinking` flag (`<think></think>` vs `<think>\n`). If a prefix cache warmup uses a different `enable_thinking` value than the actual streaming request, the final token block differs and the cache misses entirely.
+
+SoyLM v3 disables prefix cache warmup to avoid these issues.
 
 ## License
 
