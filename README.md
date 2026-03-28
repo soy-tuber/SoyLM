@@ -1,4 +1,5 @@
 <img width="1675" height="899" alt="image" src="https://github.com/user-attachments/assets/f0c7ff89-cb5e-4a7b-93b1-385ae151ea7c" />
+
 # SoyLM
 
 Local-first RAG system powered by a single 9B-parameter LLM. No vector database, no embedding models, no cloud APIs — just SQLite FTS5, BM25 ranking, and [Nemotron-Nano-9B-v2-Japanese](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2-Japanese) served locally via vLLM.
