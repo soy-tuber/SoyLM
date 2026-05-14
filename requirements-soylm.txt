@@ -1,0 +1,12 @@
+# Dependencies for the original SoyLM FastAPI app (app.py).
+# Not used by the Streamlit prototype; install only when running SoyLM:
+#   pip install -r requirements-soylm.txt
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+httpx==0.27.0
+jinja2==3.1.4
+python-multipart==0.0.9
+ddgs>=9.0
+youtube-transcript-api>=1.2
+playwright>=1.40
+pymupdf>=1.24
